@@ -1392,7 +1392,7 @@ class MapPage extends StatelessWidget {
             Positioned.fill(
               child: IgnorePointer(
                 child: Center(
-                  child: _CenterUserMarker(darkUi: darkUi),
+                  child: _CenterUserMarker(darkUi: darkUi, fixNorth: fixNorth),
                 ),
               ),
             ),
@@ -1630,12 +1630,15 @@ class _MapPainter extends CustomPainter {
 }
 
 class _CenterUserMarker extends StatelessWidget {
-  const _CenterUserMarker({required this.darkUi});
+  const _CenterUserMarker({required this.darkUi, required this.fixNorth});
 
   final bool darkUi;
+  final bool fixNorth;
 
   @override
   Widget build(BuildContext context) {
+    final accentColor = darkUi ? const Color(0xFF4DE1A1) : const Color(0xFF0E5E4C);
+
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0.92, end: 1.1),
       duration: const Duration(milliseconds: 1300),
@@ -1643,21 +1646,43 @@ class _CenterUserMarker extends StatelessWidget {
       builder: (context, value, child) {
         return Transform.scale(scale: value, child: child);
       },
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.navigation_rounded,
-            size: 34,
-            color: darkUi ? const Color(0xFF4DE1A1) : const Color(0xFF0E5E4C),
-            shadows: [
-              Shadow(
-                color: Colors.black.withOpacity(0.2),
-                blurRadius: 12,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        transitionBuilder: (child, animation) {
+          return ScaleTransition(scale: animation, child: child);
+        },
+        child: fixNorth
+            ? Container(
+                key: const ValueKey('center-dot'),
+                width: 20,
+                height: 20,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: accentColor,
+                  border: Border.all(
+                    color: darkUi ? Colors.black.withOpacity(0.35) : Colors.white,
+                    width: 3,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 12,
+                    ),
+                  ],
+                ),
+              )
+            : Icon(
+                Icons.navigation_rounded,
+                key: const ValueKey('center-arrow'),
+                size: 34,
+                color: accentColor,
+                shadows: [
+                  Shadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 12,
+                  ),
+                ],
               ),
-            ],
-          ),
-        ],
       ),
     );
   }
