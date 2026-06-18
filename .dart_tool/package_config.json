@@ -98,6 +98,12 @@
       "languageVersion": "3.8"
     },
     {
+      "name": "flutter_compass",
+      "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/flutter_compass-0.8.1",
+      "packageUri": "lib/",
+      "languageVersion": "2.12"
+    },
+    {
       "name": "flutter_lints",
       "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/flutter_lints-5.0.0",
       "packageUri": "lib/",
