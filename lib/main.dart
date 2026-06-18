@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -27,6 +28,23 @@ class CyclocompApp extends StatefulWidget {
 
 class _CyclocompAppState extends State<CyclocompApp> {
   bool _darkUi = true;
+  late final CyclocompRepository _repository;
+  late final bool _ownsRepository;
+
+  @override
+  void initState() {
+    super.initState();
+    _ownsRepository = widget.repository == null;
+    _repository = widget.repository ?? GeolocatorCyclocompRepository();
+  }
+
+  @override
+  void dispose() {
+    if (_ownsRepository) {
+      _repository.dispose();
+    }
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -56,7 +74,7 @@ class _CyclocompAppState extends State<CyclocompApp> {
       darkTheme: darkTheme,
       themeMode: _darkUi ? ThemeMode.dark : ThemeMode.light,
       home: CyclocompHome(
-        repository: widget.repository ?? GeolocatorCyclocompRepository(),
+        repository: _repository,
         useLiveMap: widget.useLiveMap,
         darkUi: _darkUi,
         onToggleUiTheme: () {
@@ -85,6 +103,12 @@ class CyclocompHome extends StatefulWidget {
 
   @override
   State<CyclocompHome> createState() => _CyclocompHomeState();
+}
+
+enum TripRecordingState {
+  idle,
+  running,
+  paused,
 }
 
 class _CyclocompHomeState extends State<CyclocompHome> {
@@ -133,7 +157,13 @@ class _CyclocompHomeState extends State<CyclocompHome> {
         controller: _pageController,
         onPageChanged: (value) => setState(() => _pageIndex = value),
         children: [
-          SpeedometerPage(reading: _reading, darkUi: widget.darkUi),
+          SpeedometerPage(
+            reading: _reading,
+            onStartTrip: widget.repository.startTrip,
+            onPauseTrip: widget.repository.pauseTrip,
+            onResumeTrip: widget.repository.resumeTrip,
+            onStopTrip: widget.repository.stopTrip,
+          ),
           MapPage(
             reading: _reading,
             mapController: _mapController,
@@ -262,11 +292,17 @@ class SpeedometerPage extends StatelessWidget {
   const SpeedometerPage({
     super.key,
     required this.reading,
-    required this.darkUi,
+    required this.onStartTrip,
+    required this.onPauseTrip,
+    required this.onResumeTrip,
+    required this.onStopTrip,
   });
 
   final CyclocompReading reading;
-  final bool darkUi;
+  final VoidCallback onStartTrip;
+  final VoidCallback onPauseTrip;
+  final VoidCallback onResumeTrip;
+  final VoidCallback onStopTrip;
 
   @override
   Widget build(BuildContext context) {
@@ -327,6 +363,11 @@ class SpeedometerPage extends StatelessWidget {
                     duration: reading.durationText,
                     subtitle: reading.detailText,
                     darkUi: darkUi,
+                    tripState: reading.tripState,
+                    onStartTrip: onStartTrip,
+                    onPauseTrip: onPauseTrip,
+                    onResumeTrip: onResumeTrip,
+                    onStopTrip: onStopTrip,
                   ),
                   const SizedBox(height: 20),
                 ],
@@ -612,12 +653,22 @@ class _TripStatsCard extends StatelessWidget {
     required this.duration,
     required this.subtitle,
     required this.darkUi,
+    required this.tripState,
+    required this.onStartTrip,
+    required this.onPauseTrip,
+    required this.onResumeTrip,
+    required this.onStopTrip,
   });
 
   final String distance;
   final String duration;
   final String subtitle;
   final bool darkUi;
+  final TripRecordingState tripState;
+  final VoidCallback onStartTrip;
+  final VoidCallback onPauseTrip;
+  final VoidCallback onResumeTrip;
+  final VoidCallback onStopTrip;
 
   @override
   Widget build(BuildContext context) {
@@ -660,6 +711,302 @@ class _TripStatsCard extends StatelessWidget {
               _MetricBlock(label: 'DURATION', value: duration),
             ],
           ),
+          const SizedBox(height: 16),
+          _TripControlPanel(
+            darkUi: darkUi,
+            tripState: tripState,
+            onStartTrip: onStartTrip,
+            onPauseTrip: onPauseTrip,
+            onResumeTrip: onResumeTrip,
+            onStopTrip: onStopTrip,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TripControlPanel extends StatefulWidget {
+  const _TripControlPanel({
+    required this.darkUi,
+    required this.tripState,
+    required this.onStartTrip,
+    required this.onPauseTrip,
+    required this.onResumeTrip,
+    required this.onStopTrip,
+  });
+
+  final bool darkUi;
+  final TripRecordingState tripState;
+  final VoidCallback onStartTrip;
+  final VoidCallback onPauseTrip;
+  final VoidCallback onResumeTrip;
+  final VoidCallback onStopTrip;
+
+  @override
+  State<_TripControlPanel> createState() => _TripControlPanelState();
+}
+
+class _TripControlPanelState extends State<_TripControlPanel> {
+  static const Duration _stopHoldDuration = Duration(milliseconds: 1000);
+  Timer? _stopHoldTimer;
+  DateTime? _stopHoldStartedAt;
+  double _stopHoldProgress = 0;
+  bool _stopArmed = false;
+
+  @override
+  void dispose() {
+    _cancelStopHold();
+    super.dispose();
+  }
+
+  void _beginStopHold() {
+    if (widget.tripState == TripRecordingState.idle) {
+      return;
+    }
+    _stopHoldTimer?.cancel();
+    _stopHoldStartedAt = DateTime.now();
+    _stopArmed = true;
+    setState(() => _stopHoldProgress = 0);
+    _stopHoldTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
+      if (!mounted || !_stopArmed || _stopHoldStartedAt == null) {
+        timer.cancel();
+        return;
+      }
+
+      final elapsed = DateTime.now().difference(_stopHoldStartedAt!);
+      final progress = (elapsed.inMilliseconds / _stopHoldDuration.inMilliseconds).clamp(0.0, 1.0);
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() => _stopHoldProgress = progress);
+
+      if (progress >= 1) {
+        timer.cancel();
+        _stopArmed = false;
+        _stopHoldStartedAt = null;
+        setState(() => _stopHoldProgress = 0);
+        widget.onStopTrip();
+      }
+    });
+  }
+
+  void _cancelStopHold() {
+    _stopHoldTimer?.cancel();
+    _stopHoldTimer = null;
+    _stopHoldStartedAt = null;
+    _stopArmed = false;
+    if (mounted && _stopHoldProgress != 0) {
+      setState(() => _stopHoldProgress = 0);
+    }
+  }
+
+  String get _stopHoldLabel {
+    if (_stopHoldProgress <= 0) {
+      return 'Stop';
+    }
+    final remaining = 1 - _stopHoldProgress;
+    if (remaining > 0.66) {
+      return '3';
+    }
+    if (remaining > 0.33) {
+      return '2';
+    }
+    return '1';
+  }
+
+  void _handlePointerUp(_) => _cancelStopHold();
+
+  void _handlePointerCancel() => _cancelStopHold();
+
+  @override
+  Widget build(BuildContext context) {
+    final darkUi = widget.darkUi;
+    final borderColor = darkUi ? Colors.white.withOpacity(0.09) : Colors.black.withOpacity(0.08);
+    final bgColor = darkUi ? Colors.white.withOpacity(0.04) : Colors.white.withOpacity(0.62);
+    final textColor = darkUi ? Colors.white : Colors.black87;
+    final subtleText = darkUi ? Colors.white70 : Colors.black54;
+
+    Widget controlButton({
+      required IconData icon,
+      required String label,
+      required VoidCallback onTap,
+      required bool active,
+    }) {
+      return Material(
+        color: active
+            ? (darkUi
+                ? const Color(0xFF4DE1A1).withOpacity(0.16)
+                : const Color(0xFF0E5E4C).withOpacity(0.12))
+            : bgColor,
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+            height: 58,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: borderColor),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  icon,
+                  size: 18,
+                  color: active
+                      ? (darkUi ? const Color(0xFF4DE1A1) : const Color(0xFF0E5E4C))
+                      : textColor,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: active
+                        ? (darkUi ? const Color(0xFFB7FFE0) : const Color(0xFF0E5E4C))
+                        : textColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget holdToStopButton() {
+      final stopColor = darkUi ? const Color(0xFFFF6B7A) : const Color(0xFFB42318);
+      final stopAccent = darkUi ? const Color(0xFFFF8A96) : const Color(0xFFE74C3C);
+      return Listener(
+        onPointerDown: (_) => _beginStopHold(),
+        onPointerUp: _handlePointerUp,
+        onPointerCancel: (_) => _handlePointerCancel(),
+        child: Material(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(18),
+          child: InkWell(
+            onTap: () {},
+            borderRadius: BorderRadius.circular(18),
+            child: Container(
+              height: 58,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: borderColor),
+              ),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(18),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: _stopHoldProgress,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  stopColor.withOpacity(0.55),
+                                  stopAccent.withOpacity(0.35),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Center(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.stop_rounded,
+                          size: 18,
+                          color: _stopHoldProgress > 0.0 ? stopAccent : textColor,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _stopHoldLabel,
+                          style: TextStyle(
+                            color: _stopHoldProgress > 0.0 ? stopAccent : textColor,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        children: [
+          Text(
+            widget.tripState == TripRecordingState.idle
+                ? 'Record belum dimulai'
+                : widget.tripState == TripRecordingState.running
+                    ? 'Record aktif'
+                    : 'Record dijeda',
+            style: TextStyle(
+              color: subtleText,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (widget.tripState == TripRecordingState.idle)
+            SizedBox(
+              width: double.infinity,
+              child: controlButton(
+                icon: Icons.play_arrow_rounded,
+                label: 'Start',
+                onTap: widget.onStartTrip,
+                active: false,
+              ),
+            )
+          else ...[
+            Row(
+              children: [
+                Expanded(
+                  child: controlButton(
+                    icon: widget.tripState == TripRecordingState.running
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                    label: widget.tripState == TripRecordingState.running ? 'Pause' : 'Resume',
+                    onTap: widget.tripState == TripRecordingState.running
+                        ? widget.onPauseTrip
+                        : widget.onResumeTrip,
+                    active: true,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: holdToStopButton(),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -869,8 +1216,8 @@ class _MapToolStack extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         _MapIconButton(
-          icon: darkUi ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
-          isActive: darkUi,
+          icon: darkUi ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+          isActive: true,
           onTap: onToggleUiTheme,
         ),
         const SizedBox(height: 10),
@@ -898,36 +1245,35 @@ class _MapIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final darkUi = Theme.of(context).brightness == Brightness.dark;
-    return Material(
-      color: isActive
-          ? (darkUi
-              ? const Color(0xFF4DE1A1).withOpacity(0.18)
-              : const Color(0xFF0E5E4C).withOpacity(0.14))
-          : (darkUi ? Colors.black.withOpacity(0.42) : Colors.white.withOpacity(0.96)),
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          width: 54,
-          height: 54,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isActive
-                  ? (darkUi
-                      ? const Color(0xFF4DE1A1).withOpacity(0.55)
-                      : const Color(0xFF0E5E4C).withOpacity(0.35))
-                  : (darkUi ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.08)),
-            ),
-          ),
-          child: Icon(
-            icon,
-            color: isActive
-                ? (darkUi ? const Color(0xFF4DE1A1) : const Color(0xFF0E5E4C))
-                : (darkUi ? Colors.white : Colors.black87),
-            size: 26,
-          ),
+    final fillColor = isActive
+        ? (darkUi
+            ? const Color(0xFF4DE1A1).withOpacity(0.18)
+            : const Color(0xFF0E5E4C).withOpacity(0.14))
+        : (darkUi ? Colors.black.withOpacity(0.42) : Colors.white.withOpacity(0.96));
+    final borderColor = isActive
+        ? (darkUi
+            ? const Color(0xFF4DE1A1).withOpacity(0.55)
+            : const Color(0xFF0E5E4C).withOpacity(0.35))
+        : (darkUi ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.08));
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        width: 54,
+        height: 54,
+        decoration: BoxDecoration(
+          color: fillColor,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: borderColor),
+        ),
+        child: Icon(
+          icon,
+          color: isActive
+              ? (darkUi ? const Color(0xFF4DE1A1) : const Color(0xFF0E5E4C))
+              : (darkUi ? Colors.white : Colors.black87),
+          size: 26,
         ),
       ),
     );
@@ -1143,6 +1489,7 @@ class CyclocompReading {
     required this.speedKmh,
     required this.distanceMeters,
     required this.duration,
+    required this.tripState,
     required this.statusText,
     required this.mapStatusText,
   });
@@ -1152,6 +1499,7 @@ class CyclocompReading {
   final double speedKmh;
   final double distanceMeters;
   final Duration duration;
+  final TripRecordingState tripState;
   final String statusText;
   final String mapStatusText;
 
@@ -1173,6 +1521,7 @@ class CyclocompReading {
       speedKmh: 0,
       distanceMeters: 0,
       duration: Duration.zero,
+      tripState: TripRecordingState.idle,
       statusText: message,
       mapStatusText: message,
     );
@@ -1184,6 +1533,7 @@ class CyclocompReading {
     double? speedKmh,
     double? distanceMeters,
     Duration? duration,
+    TripRecordingState? tripState,
     String? statusText,
     String? mapStatusText,
   }) {
@@ -1193,6 +1543,7 @@ class CyclocompReading {
       speedKmh: speedKmh ?? this.speedKmh,
       distanceMeters: distanceMeters ?? this.distanceMeters,
       duration: duration ?? this.duration,
+      tripState: tripState ?? this.tripState,
       statusText: statusText ?? this.statusText,
       mapStatusText: mapStatusText ?? this.mapStatusText,
     );
@@ -1206,6 +1557,14 @@ abstract class CyclocompRepository {
 
   void start();
 
+  void startTrip();
+
+  void pauseTrip();
+
+  void resumeTrip();
+
+  void stopTrip();
+
   void dispose();
 }
 
@@ -1215,10 +1574,14 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
   final StreamController<CyclocompReading> _controller =
       StreamController<CyclocompReading>.broadcast();
   StreamSubscription<Position>? _subscription;
+  Timer? _ticker;
   CyclocompReading _current = CyclocompReading.idle('Menunggu GPS...');
   Position? _lastPosition;
-  DateTime? _startedAt;
-  double _distanceMeters = 0;
+  TripRecordingState _tripState = TripRecordingState.idle;
+  DateTime? _tripStartedAt;
+  Duration _tripAccumulatedDuration = Duration.zero;
+  double _tripDistanceMeters = 0;
+  Position? _tripLastPosition;
 
   @override
   CyclocompReading get initial => _current;
@@ -1232,6 +1595,53 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
       return;
     }
     _bootstrap();
+  }
+
+  @override
+  void startTrip() {
+    _tripState = TripRecordingState.running;
+    _tripStartedAt = DateTime.now();
+    _tripAccumulatedDuration = Duration.zero;
+    _tripDistanceMeters = 0;
+    _tripLastPosition = _lastPosition;
+    _startTicker();
+    _emitCurrent();
+  }
+
+  @override
+  void pauseTrip() {
+    if (_tripState != TripRecordingState.running) {
+      return;
+    }
+    _tripAccumulatedDuration += DateTime.now().difference(_tripStartedAt!);
+    _tripStartedAt = null;
+    _tripLastPosition = null;
+    _tripState = TripRecordingState.paused;
+    _stopTicker();
+    _emitCurrent();
+  }
+
+  @override
+  void resumeTrip() {
+    if (_tripState != TripRecordingState.paused) {
+      return;
+    }
+    _tripState = TripRecordingState.running;
+    _tripStartedAt = DateTime.now();
+    _tripLastPosition = _lastPosition;
+    _startTicker();
+    _emitCurrent();
+  }
+
+  @override
+  void stopTrip() {
+    _tripState = TripRecordingState.idle;
+    _tripStartedAt = null;
+    _tripAccumulatedDuration = Duration.zero;
+    _tripDistanceMeters = 0;
+    _tripLastPosition = null;
+    _stopTicker();
+    _emitCurrent();
   }
 
   Future<void> _bootstrap() async {
@@ -1256,18 +1666,12 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
       }
 
       final firstPosition = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 3,
-        ),
+        locationSettings: _locationSettings(),
       );
       _handlePosition(firstPosition);
 
       _subscription = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 3,
-        ),
+        locationSettings: _locationSettings(),
       ).listen(_handlePosition);
     } catch (error) {
       _emitStatus('GPS belum tersedia: $error');
@@ -1275,34 +1679,24 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
   }
 
   void _handlePosition(Position position) {
-    final now = DateTime.now();
-    _startedAt ??= now;
-
-    if (_lastPosition != null) {
-      _distanceMeters += Geolocator.distanceBetween(
-        _lastPosition!.latitude,
-        _lastPosition!.longitude,
-        position.latitude,
-        position.longitude,
-      );
-    }
-
     _lastPosition = position;
 
     final speedFromSensor = position.speed.isFinite ? position.speed * 3.6 : 0.0;
-    final status = speedFromSensor > 0.5 ? 'GPS live' : 'Berhenti / pelan';
+    if (_tripState == TripRecordingState.running) {
+      if (_tripLastPosition != null) {
+        _tripDistanceMeters += Geolocator.distanceBetween(
+          _tripLastPosition!.latitude,
+          _tripLastPosition!.longitude,
+          position.latitude,
+          position.longitude,
+        );
+      }
+      _tripLastPosition = position;
+    }
 
-    _current = CyclocompReading(
-      position: LatLng(position.latitude, position.longitude),
-      accuracyMeters: position.accuracy,
-      speedKmh: speedFromSensor.toDouble(),
-      distanceMeters: _distanceMeters,
-      duration: now.difference(_startedAt!),
-      statusText: status,
-      mapStatusText:
-          'Titik user mengikuti koordinat GPS aktual dan tetap berada di tengah map.',
+    _emitCurrent(
+      speedText: speedFromSensor > 0.5 ? 'GPS live' : 'Berhenti / pelan',
     );
-    _controller.add(_current);
   }
 
   void _emitStatus(String message) {
@@ -1310,9 +1704,85 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
     _controller.add(_current);
   }
 
+  void _emitCurrent({
+    String? speedText,
+    String? mapStatusText,
+  }) {
+    final now = DateTime.now();
+    final speedKmh = _lastPosition?.speed.isFinite == true
+        ? _lastPosition!.speed * 3.6
+        : 0.0;
+    final duration = switch (_tripState) {
+      TripRecordingState.idle => Duration.zero,
+      TripRecordingState.running =>
+        _tripAccumulatedDuration + now.difference(_tripStartedAt!),
+      TripRecordingState.paused => _tripAccumulatedDuration,
+    };
+
+    final distanceMeters = switch (_tripState) {
+      TripRecordingState.idle => 0.0,
+      TripRecordingState.running => _tripDistanceMeters,
+      TripRecordingState.paused => _tripDistanceMeters,
+    };
+
+    _current = CyclocompReading(
+      position: _lastPosition == null
+          ? null
+          : LatLng(_lastPosition!.latitude, _lastPosition!.longitude),
+      accuracyMeters: _lastPosition?.accuracy,
+      speedKmh: speedKmh,
+      distanceMeters: distanceMeters,
+      duration: duration,
+      tripState: _tripState,
+      statusText: speedText ?? (speedKmh > 0.5 ? 'GPS live' : 'Berhenti / pelan'),
+      mapStatusText:
+          mapStatusText ?? 'Titik user mengikuti koordinat GPS aktual dan tetap berada di tengah map.',
+    );
+    _controller.add(_current);
+  }
+
+  void _startTicker() {
+    _ticker ??= Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_tripState == TripRecordingState.running ||
+          _tripState == TripRecordingState.paused) {
+        _emitCurrent();
+      }
+    });
+  }
+
+  void _stopTicker() {
+    _ticker?.cancel();
+    _ticker = null;
+  }
+
+  LocationSettings _locationSettings() {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return AndroidSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 0,
+          intervalDuration: const Duration(milliseconds: 500),
+        );
+      case TargetPlatform.iOS:
+      case TargetPlatform.macOS:
+        return AppleSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 0,
+          pauseLocationUpdatesAutomatically: false,
+          activityType: ActivityType.fitness,
+        );
+      default:
+        return LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 0,
+        );
+    }
+  }
+
   @override
   void dispose() {
     _subscription?.cancel();
+    _stopTicker();
     _controller.close();
   }
 }
@@ -1330,8 +1800,9 @@ class FakeCyclocompRepository implements CyclocompRepository {
     position: const LatLng(-7.2765, 112.7919),
     accuracyMeters: 4.5,
     speedKmh: 28.4,
-    distanceMeters: 12400,
-    duration: const Duration(minutes: 38, seconds: 12),
+    distanceMeters: 0,
+    duration: Duration.zero,
+    tripState: TripRecordingState.idle,
     statusText: 'GPS live',
     mapStatusText: 'Demo data aktif untuk test atau preview UI.',
   );
@@ -1344,6 +1815,38 @@ class FakeCyclocompRepository implements CyclocompRepository {
 
   @override
   void start() {
+    _controller.add(_initial);
+  }
+
+  @override
+  void startTrip() {
+    _initial = _initial.copyWith(
+      tripState: TripRecordingState.running,
+      distanceMeters: 0,
+      duration: Duration.zero,
+    );
+    _controller.add(_initial);
+  }
+
+  @override
+  void pauseTrip() {
+    _initial = _initial.copyWith(tripState: TripRecordingState.paused);
+    _controller.add(_initial);
+  }
+
+  @override
+  void resumeTrip() {
+    _initial = _initial.copyWith(tripState: TripRecordingState.running);
+    _controller.add(_initial);
+  }
+
+  @override
+  void stopTrip() {
+    _initial = _initial.copyWith(
+      tripState: TripRecordingState.idle,
+      distanceMeters: 0,
+      duration: Duration.zero,
+    );
     _controller.add(_initial);
   }
 
