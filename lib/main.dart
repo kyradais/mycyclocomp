@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:gpx/gpx.dart';
 import 'package:latlong2/latlong.dart';
 
 void main() {
@@ -123,14 +126,24 @@ class _CyclocompHomeState extends State<CyclocompHome> {
   bool _fixNorth = true;
   double? _heading;
 
+  // Jejak rute hijau saat record berjalan.
+  final List<LatLng> _trailPoints = [];
+  TripRecordingState _lastTripState = TripRecordingState.idle;
+
+  // Rute GPX yang diupload manual oleh user.
+  List<LatLng> _gpxRoutePoints = [];
+  String? _gpxFileName;
+
   @override
   void initState() {
     super.initState();
     _reading = widget.repository.initial;
+    _lastTripState = _reading.tripState;
     _subscription = widget.repository.watch().listen((reading) {
       if (!mounted) {
         return;
       }
+      _handleTrailUpdate(reading);
       setState(() => _reading = reading);
       if (_mapReady && reading.position != null) {
         _mapController.move(reading.position!, _mapController.camera.zoom);
@@ -138,6 +151,120 @@ class _CyclocompHomeState extends State<CyclocompHome> {
       }
     });
     widget.repository.start();
+  }
+
+  void _handleTrailUpdate(CyclocompReading reading) {
+    final wasIdle = _lastTripState == TripRecordingState.idle;
+    final isIdleNow = reading.tripState == TripRecordingState.idle;
+    final isRunningNow = reading.tripState == TripRecordingState.running;
+
+    // Trip baru saja di-stop -> reset jejak (hapus garis hijau).
+    if (isIdleNow && !wasIdle) {
+      _trailPoints.clear();
+    }
+
+    // Trip baru saja di-start dari idle -> mulai jejak baru dari titik sekarang.
+    if (isRunningNow && wasIdle) {
+      _trailPoints.clear();
+      if (reading.position != null) {
+        _trailPoints.add(reading.position!);
+      }
+    } else if (isRunningNow && reading.position != null) {
+      // Hanya menambah titik jejak saat status running (tidak menambah saat paused).
+      final last = _trailPoints.isEmpty ? null : _trailPoints.last;
+      if (last == null ||
+          last.latitude != reading.position!.latitude ||
+          last.longitude != reading.position!.longitude) {
+        _trailPoints.add(reading.position!);
+      }
+    }
+
+    _lastTripState = reading.tripState;
+  }
+
+  Future<void> _pickGpxFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) {
+        return;
+      }
+      final picked = result.files.single;
+      final lowerName = picked.name.toLowerCase();
+      if (!lowerName.endsWith('.gpx')) {
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Pilih file dengan ekstensi .gpx')),
+        );
+        return;
+      }
+      final bytes = picked.bytes ??
+          (picked.path != null ? await File(picked.path!).readAsBytes() : null);
+      if (bytes == null) {
+        return;
+      }
+      final xmlString = String.fromCharCodes(bytes);
+      final gpx = GpxReader().fromString(xmlString);
+
+      final points = <LatLng>[];
+      for (final trk in gpx.trks) {
+        for (final seg in trk.trksegs) {
+          for (final point in seg.trkpts) {
+            final lat = point.lat;
+            final lon = point.lon;
+            if (lat != null && lon != null) {
+              points.add(LatLng(lat, lon));
+            }
+          }
+        }
+      }
+      // Fallback ke rute (rte) jika file GPX tidak punya track.
+      if (points.isEmpty) {
+        for (final rte in gpx.rtes) {
+          for (final point in rte.rtepts) {
+            final lat = point.lat;
+            final lon = point.lon;
+            if (lat != null && lon != null) {
+              points.add(LatLng(lat, lon));
+            }
+          }
+        }
+      }
+
+      if (points.isEmpty || !mounted) {
+        return;
+      }
+
+      setState(() {
+        _gpxRoutePoints = points;
+        _gpxFileName = picked.name;
+      });
+
+      _mapController.fitCamera(
+        CameraFit.coordinates(
+          coordinates: points,
+          padding: const EdgeInsets.all(48),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Gagal membaca file GPX: $error')),
+      );
+    }
+  }
+
+  void _clearGpxRoute() {
+    setState(() {
+      _gpxRoutePoints = [];
+      _gpxFileName = null;
+    });
   }
 
   @override
@@ -170,6 +297,11 @@ class _CyclocompHomeState extends State<CyclocompHome> {
             useLiveMap: widget.useLiveMap,
             darkUi: widget.darkUi,
             fixNorth: _fixNorth,
+            trailPoints: _trailPoints,
+            gpxRoutePoints: _gpxRoutePoints,
+            gpxFileName: _gpxFileName,
+            onPickGpxFile: _pickGpxFile,
+            onClearGpxRoute: _clearGpxRoute,
             onToggleFixNorth: _toggleFixNorth,
             onToggleUiTheme: widget.onToggleUiTheme,
             onMapReady: () {
@@ -1059,6 +1191,11 @@ class MapPage extends StatelessWidget {
     required this.useLiveMap,
     required this.darkUi,
     required this.fixNorth,
+    required this.trailPoints,
+    required this.gpxRoutePoints,
+    required this.gpxFileName,
+    required this.onPickGpxFile,
+    required this.onClearGpxRoute,
     required this.onToggleFixNorth,
     required this.onToggleUiTheme,
     required this.onMapReady,
@@ -1069,9 +1206,74 @@ class MapPage extends StatelessWidget {
   final bool useLiveMap;
   final bool darkUi;
   final bool fixNorth;
+  final List<LatLng> trailPoints;
+  final List<LatLng> gpxRoutePoints;
+  final String? gpxFileName;
+  final VoidCallback onPickGpxFile;
+  final VoidCallback onClearGpxRoute;
   final VoidCallback onToggleFixNorth;
   final VoidCallback onToggleUiTheme;
   final VoidCallback onMapReady;
+
+  static const Color _trailColor = Color(0xFF35E27A);
+  static const Color _gpxColor = Color(0xFFFFD23F);
+
+  List<Marker> _buildGpxArrowMarkers() {
+    if (gpxRoutePoints.length < 2) {
+      return const [];
+    }
+    const distance = Distance();
+
+    // Hitung total panjang rute agar jarak antar panah konsisten (berbasis
+    // jarak fisik, bukan jumlah titik) supaya tidak berdempetan di bagian
+    // rute yang titiknya rapat (misal saat belok).
+    var totalMeters = 0.0;
+    for (var i = 0; i < gpxRoutePoints.length - 1; i++) {
+      totalMeters += distance(gpxRoutePoints[i], gpxRoutePoints[i + 1]);
+    }
+    if (totalMeters <= 0) {
+      return const [];
+    }
+
+    // Target sekitar 8-10 panah untuk rute sepanjang apapun, dengan jarak
+    // minimum antar panah supaya tetap renggang pada rute pendek.
+    const minSpacingMeters = 120.0;
+    final spacingMeters = math.max(minSpacingMeters, totalMeters / 9);
+
+    final markers = <Marker>[];
+    var distanceSinceLastArrow = spacingMeters; // agar panah pertama langsung muncul
+    for (var i = 0; i < gpxRoutePoints.length - 1; i++) {
+      final from = gpxRoutePoints[i];
+      final to = gpxRoutePoints[i + 1];
+      final segmentLength = distance(from, to);
+      distanceSinceLastArrow += segmentLength;
+
+      if (distanceSinceLastArrow >= spacingMeters) {
+        distanceSinceLastArrow = 0;
+        final bearing = distance.bearing(from, to);
+        markers.add(
+          Marker(
+            point: from,
+            width: 22,
+            height: 22,
+            rotate: false,
+            child: Transform.rotate(
+              angle: bearing * (math.pi / 180),
+              child: Icon(
+                Icons.navigation_rounded,
+                size: 18,
+                color: _gpxColor,
+                shadows: const [
+                  Shadow(color: Colors.black54, blurRadius: 4),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+    }
+    return markers;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1118,6 +1320,29 @@ class MapPage extends StatelessWidget {
                         : 'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
                     userAgentPackageName: 'com.example.mycyclocomp',
                   ),
+                  if (gpxRoutePoints.length > 1)
+                    PolylineLayer(
+                      polylines: [
+                        Polyline(
+                          points: gpxRoutePoints,
+                          strokeWidth: 4,
+                          color: _gpxColor,
+                          pattern: StrokePattern.dashed(segments: const [10.0, 8.0]),
+                        ),
+                      ],
+                    ),
+                  if (gpxRoutePoints.length > 1)
+                    MarkerLayer(markers: _buildGpxArrowMarkers()),
+                  if (trailPoints.length > 1)
+                    PolylineLayer(
+                      polylines: [
+                        Polyline(
+                          points: trailPoints,
+                          strokeWidth: 5,
+                          color: _trailColor,
+                        ),
+                      ],
+                    ),
                 ],
               )
             else
@@ -1160,26 +1385,34 @@ class MapPage extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 18),
-                    const Spacer(),
-                    Center(
-                      child: _CenterUserMarker(darkUi: darkUi),
-                    ),
-                    const Spacer(),
-                    _MapFooter(
-                      coordinateText: position == null
-                          ? 'Koordinat belum tersedia'
-                          : '${position.latitude.toStringAsFixed(6)}, ${position.longitude.toStringAsFixed(6)}',
-                      accuracyText: reading.accuracyMeters == null
-                          ? 'Menunggu GPS'
-                          : 'Akurasi ±${reading.accuracyMeters!.toStringAsFixed(1)} m',
-                    ),
                   ],
+                ),
+              ),
+            ),
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Center(
+                  child: _CenterUserMarker(darkUi: darkUi),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 20,
+              right: 20,
+              bottom: 20,
+              child: SafeArea(
+                top: false,
+                child: _GpxUploadBar(
+                  darkUi: darkUi,
+                  gpxFileName: gpxFileName,
+                  onPickGpxFile: onPickGpxFile,
+                  onClearGpxRoute: onClearGpxRoute,
                 ),
               ),
             ),
             Positioned(
               right: 20,
-              bottom: 98,
+              bottom: 110,
               child: SafeArea(
                 top: false,
                 child: _MapToolStack(
@@ -1430,29 +1663,104 @@ class _CenterUserMarker extends StatelessWidget {
   }
 }
 
-class _MapFooter extends StatelessWidget {
-  const _MapFooter({
-    required this.coordinateText,
-    required this.accuracyText,
+class _GpxUploadBar extends StatefulWidget {
+  const _GpxUploadBar({
+    required this.darkUi,
+    required this.gpxFileName,
+    required this.onPickGpxFile,
+    required this.onClearGpxRoute,
   });
 
-  final String coordinateText;
-  final String accuracyText;
+  final bool darkUi;
+  final String? gpxFileName;
+  final VoidCallback onPickGpxFile;
+  final VoidCallback onClearGpxRoute;
+
+  @override
+  State<_GpxUploadBar> createState() => _GpxUploadBarState();
+}
+
+class _GpxUploadBarState extends State<_GpxUploadBar> {
+  static const Duration _holdDuration = Duration(milliseconds: 1000);
+  Timer? _holdTimer;
+  DateTime? _holdStartedAt;
+  double _holdProgress = 0;
+  bool _holdArmed = false;
+
+  @override
+  void dispose() {
+    _cancelHold();
+    super.dispose();
+  }
+
+  void _beginHold() {
+    _holdTimer?.cancel();
+    _holdStartedAt = DateTime.now();
+    _holdArmed = true;
+    setState(() => _holdProgress = 0);
+    _holdTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
+      if (!mounted || !_holdArmed || _holdStartedAt == null) {
+        timer.cancel();
+        return;
+      }
+      final elapsed = DateTime.now().difference(_holdStartedAt!);
+      final progress = (elapsed.inMilliseconds / _holdDuration.inMilliseconds).clamp(0.0, 1.0);
+      setState(() => _holdProgress = progress);
+
+      if (progress >= 1) {
+        timer.cancel();
+        _holdArmed = false;
+        _holdStartedAt = null;
+        setState(() => _holdProgress = 0);
+        widget.onClearGpxRoute();
+      }
+    });
+  }
+
+  void _cancelHold() {
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    _holdStartedAt = null;
+    _holdArmed = false;
+    if (mounted && _holdProgress != 0) {
+      setState(() => _holdProgress = 0);
+    }
+  }
+
+  String get _holdLabel {
+    if (_holdProgress <= 0) {
+      return '';
+    }
+    final remaining = 1 - _holdProgress;
+    if (remaining > 0.66) {
+      return '3';
+    }
+    if (remaining > 0.33) {
+      return '2';
+    }
+    return '1';
+  }
 
   @override
   Widget build(BuildContext context) {
-    final bgDark = Theme.of(context).brightness == Brightness.dark;
+    final darkUi = widget.darkUi;
+    final bgColor = darkUi ? Colors.white.withOpacity(0.06) : Colors.white.withOpacity(0.72);
+    final borderColor = darkUi ? Colors.white.withOpacity(0.09) : Colors.black.withOpacity(0.08);
+    final textColor = darkUi ? Colors.white : Colors.black87;
+    final subtleText = darkUi ? Colors.white70 : Colors.black54;
+    const gpxColor = Color(0xFFFFD23F);
+
+    final hasGpx = widget.gpxFileName != null;
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       decoration: BoxDecoration(
-        color: bgDark ? Colors.white.withOpacity(0.06) : Colors.white.withOpacity(0.72),
+        color: bgColor,
         borderRadius: BorderRadius.circular(28),
-        border: Border.all(
-          color: bgDark ? Colors.white.withOpacity(0.09) : Colors.black.withOpacity(0.08),
-        ),
+        border: Border.all(color: borderColor),
         boxShadow: [
-          if (!bgDark)
+          if (!darkUi)
             BoxShadow(
               color: Colors.black.withOpacity(0.06),
               blurRadius: 18,
@@ -1460,23 +1768,132 @@ class _MapFooter extends StatelessWidget {
             ),
         ],
       ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.location_on,
-            color: bgDark ? const Color(0xFF4DE1A1) : const Color(0xFF0E5E4C),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              '$coordinateText\n$accuracyText',
-              style: TextStyle(
-                color: bgDark ? Colors.white70 : Colors.black54,
-                height: 1.35,
+      child: Material(
+        type: MaterialType.transparency,
+        child: hasGpx
+            ? Row(
+                children: [
+                  Expanded(
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(20),
+                      onTap: () {},
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: Row(
+                          children: [
+                            Icon(Icons.route_rounded, color: gpxColor, size: 20),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Rute GPX aktif',
+                                    style: TextStyle(
+                                      color: subtleText,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: 0.8,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    widget.gpxFileName!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: textColor,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Listener(
+                    onPointerDown: (_) => _beginHold(),
+                    onPointerUp: (_) => _cancelHold(),
+                    onPointerCancel: (_) => _cancelHold(),
+                    child: Material(
+                      color: darkUi ? Colors.black.withOpacity(0.28) : Colors.black.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(16),
+                      child: InkWell(
+                        onTap: () {},
+                        borderRadius: BorderRadius.circular(16),
+                        child: Container(
+                          width: 50,
+                          height: 50,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: darkUi ? Colors.white.withOpacity(0.09) : Colors.black.withOpacity(0.08),
+                            ),
+                          ),
+                          child: Stack(
+                            children: [
+                              Positioned.fill(
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: FractionallySizedBox(
+                                      widthFactor: _holdProgress,
+                                      child: Container(
+                                        color: const Color(0xFFFF6B7A).withOpacity(0.55),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Center(
+                                child: _holdProgress > 0
+                                    ? Text(
+                                        _holdLabel,
+                                        style: const TextStyle(
+                                          color: Color(0xFFFF8A96),
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      )
+                                    : Icon(Icons.close_rounded, color: textColor, size: 20),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: widget.onPickGpxFile,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.upload_file_rounded, color: gpxColor, size: 20),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Upload Rute GPX',
+                        style: TextStyle(
+                          color: textColor,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            ),
-          ),
-        ],
       ),
     );
   }

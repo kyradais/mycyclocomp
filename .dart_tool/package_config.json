@@ -44,6 +44,12 @@
       "languageVersion": "3.4"
     },
     {
+      "name": "cross_file",
+      "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/cross_file-0.3.5+2",
+      "packageUri": "lib/",
+      "languageVersion": "3.8"
+    },
+    {
       "name": "crypto",
       "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/crypto-3.0.7",
       "packageUri": "lib/",
@@ -86,6 +92,12 @@
       "languageVersion": "3.7"
     },
     {
+      "name": "file_picker",
+      "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/file_picker-8.3.7",
+      "packageUri": "lib/",
+      "languageVersion": "3.4"
+    },
+    {
       "name": "fixnum",
       "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/fixnum-1.1.1",
       "packageUri": "lib/",
@@ -114,6 +126,12 @@
       "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/flutter_map-8.3.0",
       "packageUri": "lib/",
       "languageVersion": "3.6"
+    },
+    {
+      "name": "flutter_plugin_android_lifecycle",
+      "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/flutter_plugin_android_lifecycle-2.0.34",
+      "packageUri": "lib/",
+      "languageVersion": "3.9"
     },
     {
       "name": "flutter_test",
@@ -174,6 +192,12 @@
       "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/geolocator_windows-0.2.5",
       "packageUri": "lib/",
       "languageVersion": "3.5"
+    },
+    {
+      "name": "gpx",
+      "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/gpx-2.3.0",
+      "packageUri": "lib/",
+      "languageVersion": "2.19"
     },
     {
       "name": "gsettings",
@@ -354,6 +378,12 @@
       "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/proj4dart-3.0.0",
       "packageUri": "lib/",
       "languageVersion": "3.0"
+    },
+    {
+      "name": "quiver",
+      "rootUri": "file:///home/gembira/.pub-cache/hosted/pub.dev/quiver-3.2.2",
+      "packageUri": "lib/",
+      "languageVersion": "2.17"
     },
     {
       "name": "simple_sparse_list",
