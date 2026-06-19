@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
@@ -12,6 +13,13 @@ import 'package:gpx/gpx.dart';
 import 'package:latlong2/latlong.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Sembunyikan status bar (atas) & navigation bar (bawah) agar app fullscreen.
+  // immersiveSticky: overlay bisa muncul sementara dengan swipe dari tepi,
+  // lalu otomatis sembunyi lagi.
+
+  // Uncoment bagian ini untuk sembunyikan topbar
+  // SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   runApp(const CyclocompApp());
 }
 
@@ -318,7 +326,6 @@ class _CyclocompHomeState extends State<CyclocompHome> {
           ),
         ],
       ),
-      bottomNavigationBar: _PageHintBar(pageIndex: _pageIndex),
     );
   }
 
@@ -363,63 +370,6 @@ class _CyclocompHomeState extends State<CyclocompHome> {
   }
 }
 
-class _PageHintBar extends StatelessWidget {
-  const _PageHintBar({required this.pageIndex});
-
-  final int pageIndex;
-
-  @override
-  Widget build(BuildContext context) {
-    final darkUi = Theme.of(context).brightness == Brightness.dark;
-    return SafeArea(
-      top: false,
-      child: Container(
-        height: 58,
-        decoration: BoxDecoration(
-          color: darkUi
-              ? const Color(0xFF0D1721).withOpacity(0.9)
-              : Colors.white.withOpacity(0.92),
-          border: Border(
-            top: BorderSide(
-              color: darkUi ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.08),
-            ),
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _Dot(active: pageIndex == 0),
-            const SizedBox(width: 10),
-            _Dot(active: pageIndex == 1),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Dot extends StatelessWidget {
-  const _Dot({required this.active});
-
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    final darkUi = Theme.of(context).brightness == Brightness.dark;
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      width: active ? 22 : 8,
-      height: 8,
-      decoration: BoxDecoration(
-        color: active
-            ? const Color(0xFF4DE1A1)
-            : (darkUi ? Colors.white24 : Colors.black26),
-        borderRadius: BorderRadius.circular(99),
-      ),
-    );
-  }
-}
-
 class SpeedometerPage extends StatelessWidget {
   const SpeedometerPage({
     super.key,
@@ -461,49 +411,75 @@ class SpeedometerPage extends StatelessWidget {
         child: Stack(
           children: [
             Positioned.fill(child: _SpeedometerBackdrop(darkUi: darkUi)),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                children: [
-                  const SizedBox(height: 18),
-                  Row(
-                    children: [
-                      _HeaderChip(
-                        icon: Icons.directions_bike,
-                        label: 'Cyclocomp',
-                        darkUi: darkUi,
+            LayoutBuilder(
+              builder: (context, constraints) {
+                // Ukuran gauge menyesuaikan tinggi yang tersedia (misal saat
+                // app di-split/multi-window dan tinggi viewport mengecil),
+                // supaya tidak overflow tanpa perlu scroll dalam kondisi normal.
+                final availableHeight = constraints.maxHeight;
+                final gaugeSize = math.min(320.0, math.max(160.0, availableHeight * 0.42));
+
+                return SingleChildScrollView(
+                  physics: const ClampingScrollPhysics(),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minHeight: availableHeight),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(height: 18),
+                              Row(
+                                children: [
+                                  _HeaderChip(
+                                    icon: Icons.directions_bike,
+                                    label: 'Cyclocomp',
+                                    darkUi: darkUi,
+                                  ),
+                                  const Spacer(),
+                                  _HeaderChip(
+                                    icon: Icons.swipe_left,
+                                    label: 'Swipe ke Map',
+                                    darkUi: darkUi,
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          Center(
+                            child: _SpeedometerGauge(
+                              speedKmh: reading.speedKmh,
+                              status: reading.statusText,
+                              darkUi: darkUi,
+                              size: gaugeSize,
+                            ),
+                          ),
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _TripStatsCard(
+                                distance: reading.distanceText,
+                                duration: reading.durationText,
+                                subtitle: reading.detailText,
+                                darkUi: darkUi,
+                                tripState: reading.tripState,
+                                onStartTrip: onStartTrip,
+                                onPauseTrip: onPauseTrip,
+                                onResumeTrip: onResumeTrip,
+                                onStopTrip: onStopTrip,
+                              ),
+                              const SizedBox(height: 20),
+                            ],
+                          ),
+                        ],
                       ),
-                      const Spacer(),
-                      _HeaderChip(
-                        icon: Icons.swipe_left,
-                        label: 'Swipe ke Map',
-                        darkUi: darkUi,
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
-                  Center(
-                    child: _SpeedometerGauge(
-                      speedKmh: reading.speedKmh,
-                      status: reading.statusText,
-                      darkUi: darkUi,
                     ),
                   ),
-                  const Spacer(),
-                  _TripStatsCard(
-                    distance: reading.distanceText,
-                    duration: reading.durationText,
-                    subtitle: reading.detailText,
-                    darkUi: darkUi,
-                    tripState: reading.tripState,
-                    onStartTrip: onStartTrip,
-                    onPauseTrip: onPauseTrip,
-                    onResumeTrip: onResumeTrip,
-                    onStopTrip: onStopTrip,
-                  ),
-                  const SizedBox(height: 20),
-                ],
-              ),
+                );
+              },
             ),
           ],
         ),
@@ -621,28 +597,34 @@ class _SpeedometerGauge extends StatelessWidget {
     required this.speedKmh,
     required this.status,
     required this.darkUi,
+    this.size = 320,
   });
 
   final double speedKmh;
   final String status;
   final bool darkUi;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
     final darkUi = Theme.of(context).brightness == Brightness.dark;
+    // Skala proporsional terhadap ukuran dasar 320, agar font & spacing
+    // tetap proporsional saat gauge mengecil (misal di mode split-screen).
+    final scale = size / 320;
+
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: speedKmh),
       duration: const Duration(milliseconds: 700),
       curve: Curves.easeOutCubic,
       builder: (context, value, _) {
         return SizedBox(
-          width: 320,
-          height: 320,
+          width: size,
+          height: size,
           child: Stack(
             alignment: Alignment.center,
             children: [
               CustomPaint(
-                size: const Size(320, 320),
+                size: Size(size, size),
                 painter: _GaugePainter(value, darkUi: darkUi),
               ),
               Column(
@@ -652,27 +634,27 @@ class _SpeedometerGauge extends StatelessWidget {
                     value.toStringAsFixed(1),
                     style: TextStyle(
                       color: darkUi ? Colors.white : Colors.black87,
-                      fontSize: 76,
+                      fontSize: 76 * scale,
                       fontWeight: FontWeight.w700,
                       letterSpacing: -2,
                       height: 0.95,
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  SizedBox(height: 4 * scale),
                   Text(
                     'km/h',
                     style: TextStyle(
                       color: darkUi ? Colors.white70 : Colors.black54,
-                      fontSize: 18,
+                      fontSize: 18 * scale,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  SizedBox(height: 10 * scale),
                   Text(
                     status,
                     style: TextStyle(
                       color: darkUi ? Colors.white54 : Colors.black45,
-                      fontSize: 12,
+                      fontSize: 12 * scale,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -698,9 +680,24 @@ class _GaugePainter extends CustomPainter {
     final radius = size.width * 0.36;
     final rect = Rect.fromCircle(center: center, radius: radius);
 
+    // Skala semua elemen non-radius (stroke, tick, jarum, dot tengah) secara
+    // proporsional terhadap ukuran dasar 320px, agar tetap rapi & terbaca
+    // saat gauge mengecil (misal di mode split-screen).
+    final scale = size.width / 320;
+    final trackStrokeWidth = 18 * scale;
+    final tickOuterOffset = 16 * scale;
+    final tickInnerOffsetMajor = 18 * scale;
+    final tickInnerOffsetMinor = 12 * scale;
+    final tickStrokeWidthMajor = 3 * scale;
+    final tickStrokeWidthMinor = 2 * scale;
+    final needleStrokeWidth = math.max(2.0, 5 * scale);
+    final needleInsetFromEdge = 16 * scale;
+    final hubOuterRadius = 14 * scale;
+    final hubInnerRadius = 6 * scale;
+
     final trackPaint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 18
+      ..strokeWidth = trackStrokeWidth
       ..strokeCap = StrokeCap.round
       ..color = darkUi
           ? Colors.white.withOpacity(0.08)
@@ -709,7 +706,7 @@ class _GaugePainter extends CustomPainter {
 
     final progress = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 18
+      ..strokeWidth = trackStrokeWidth
       ..strokeCap = StrokeCap.round
       ..shader = const LinearGradient(
         colors: [Color(0xFF4DE1A1), Color(0xFF83F0C1)],
@@ -725,18 +722,18 @@ class _GaugePainter extends CustomPainter {
     for (var i = 0; i <= 10; i++) {
       final tickAngle = math.pi * 0.85 + (math.pi * 1.3 / 10) * i;
       final outer = Offset(
-        center.dx + math.cos(tickAngle) * (radius + 16),
-        center.dy + math.sin(tickAngle) * (radius + 16),
+        center.dx + math.cos(tickAngle) * (radius + tickOuterOffset),
+        center.dy + math.sin(tickAngle) * (radius + tickOuterOffset),
       );
       final inner = Offset(
-        center.dx + math.cos(tickAngle) * (radius - (i.isEven ? 18 : 12)),
-        center.dy + math.sin(tickAngle) * (radius - (i.isEven ? 18 : 12)),
+        center.dx + math.cos(tickAngle) * (radius - (i.isEven ? tickInnerOffsetMajor : tickInnerOffsetMinor)),
+        center.dy + math.sin(tickAngle) * (radius - (i.isEven ? tickInnerOffsetMajor : tickInnerOffsetMinor)),
       );
       canvas.drawLine(
         inner,
         outer,
         Paint()
-          ..strokeWidth = i.isEven ? 3 : 2
+          ..strokeWidth = i.isEven ? tickStrokeWidthMajor : tickStrokeWidthMinor
           ..strokeCap = StrokeCap.round
           ..color = darkUi
               ? Colors.white.withOpacity(i.isEven ? 0.45 : 0.18)
@@ -745,7 +742,7 @@ class _GaugePainter extends CustomPainter {
     }
 
     final needleAngle = math.pi * 0.85 + (math.pi * 1.3 * (speed / 60));
-    final needleLength = radius - 16;
+    final needleLength = radius - needleInsetFromEdge;
     final needleEnd = Offset(
       center.dx + math.cos(needleAngle) * needleLength,
       center.dy + math.sin(needleAngle) * needleLength,
@@ -755,20 +752,20 @@ class _GaugePainter extends CustomPainter {
       center,
       needleEnd,
       Paint()
-        ..strokeWidth = 5
+        ..strokeWidth = needleStrokeWidth
         ..strokeCap = StrokeCap.round
         ..color = const Color(0xFF4DE1A1),
     );
 
     canvas.drawCircle(
       center,
-      14,
+      hubOuterRadius,
       Paint()
         ..color = darkUi ? const Color(0xFF4DE1A1) : const Color(0xFF0E5E4C),
     );
     canvas.drawCircle(
       center,
-      6,
+      hubInnerRadius,
       Paint()..color = darkUi ? Colors.white : Colors.black87,
     );
   }
