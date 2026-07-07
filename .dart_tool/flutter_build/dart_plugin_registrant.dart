@@ -7,19 +7,24 @@
 
 import 'dart:io'; // flutter_ignore: dart_io_import.
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_blue_plus_android/flutter_blue_plus_android.dart';
 import 'package:geolocator_android/geolocator_android.dart';
 import 'package:path_provider_android/path_provider_android.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_blue_plus_darwin/flutter_blue_plus_darwin.dart';
 import 'package:geolocator_apple/geolocator_apple.dart';
 import 'package:path_provider_foundation/path_provider_foundation.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_blue_plus_linux/flutter_blue_plus_linux.dart';
 import 'package:geolocator_linux/geolocator_linux.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider_linux/path_provider_linux.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_blue_plus_darwin/flutter_blue_plus_darwin.dart';
 import 'package:geolocator_apple/geolocator_apple.dart';
 import 'package:path_provider_foundation/path_provider_foundation.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_blue_plus_winrt/flutter_blue_plus_winrt.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider_windows/path_provider_windows.dart';
 
@@ -34,6 +39,15 @@ class _PluginRegistrant {
       } catch (err) {
         print(
           '`file_picker` threw an error: $err. '
+          'The app may not function as expected until you remove this plugin from pubspec.yaml'
+        );
+      }
+
+      try {
+        FlutterBluePlusAndroid.registerWith();
+      } catch (err) {
+        print(
+          '`flutter_blue_plus_android` threw an error: $err. '
           'The app may not function as expected until you remove this plugin from pubspec.yaml'
         );
       }
@@ -67,6 +81,15 @@ class _PluginRegistrant {
       }
 
       try {
+        FlutterBluePlusDarwin.registerWith();
+      } catch (err) {
+        print(
+          '`flutter_blue_plus_darwin` threw an error: $err. '
+          'The app may not function as expected until you remove this plugin from pubspec.yaml'
+        );
+      }
+
+      try {
         GeolocatorApple.registerWith();
       } catch (err) {
         print(
@@ -90,6 +113,15 @@ class _PluginRegistrant {
       } catch (err) {
         print(
           '`file_picker` threw an error: $err. '
+          'The app may not function as expected until you remove this plugin from pubspec.yaml'
+        );
+      }
+
+      try {
+        FlutterBluePlusLinux.registerWith();
+      } catch (err) {
+        print(
+          '`flutter_blue_plus_linux` threw an error: $err. '
           'The app may not function as expected until you remove this plugin from pubspec.yaml'
         );
       }
@@ -132,6 +164,15 @@ class _PluginRegistrant {
       }
 
       try {
+        FlutterBluePlusDarwin.registerWith();
+      } catch (err) {
+        print(
+          '`flutter_blue_plus_darwin` threw an error: $err. '
+          'The app may not function as expected until you remove this plugin from pubspec.yaml'
+        );
+      }
+
+      try {
         GeolocatorApple.registerWith();
       } catch (err) {
         print(
@@ -155,6 +196,15 @@ class _PluginRegistrant {
       } catch (err) {
         print(
           '`file_picker` threw an error: $err. '
+          'The app may not function as expected until you remove this plugin from pubspec.yaml'
+        );
+      }
+
+      try {
+        FlutterBluePlusWinrt.registerWith();
+      } catch (err) {
+        print(
+          '`flutter_blue_plus_winrt` threw an error: $err. '
           'The app may not function as expected until you remove this plugin from pubspec.yaml'
         );
       }

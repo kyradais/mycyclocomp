@@ -12,6 +12,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:gpx/gpx.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'heart_rate_monitor.dart';
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   // Sembunyikan status bar (atas) & navigation bar (bawah) agar app fullscreen.
@@ -129,6 +131,13 @@ class _CyclocompHomeState extends State<CyclocompHome> {
   late CyclocompReading _reading;
   StreamSubscription<CyclocompReading>? _subscription;
   StreamSubscription<CompassEvent>? _compassSubscription;
+
+  // --- Heart rate monitor (BLE broadcast) ---
+  final HeartRateService _hrService = HeartRateService();
+  StreamSubscription<int>? _hrSubscription;
+  HeartRateProfile _hrProfile = const HeartRateProfile();
+  int _hrBpm = 0;
+
   int _pageIndex = 0;
   bool _mapReady = false;
   bool _fixNorth = true;
@@ -159,6 +168,11 @@ class _CyclocompHomeState extends State<CyclocompHome> {
       }
     });
     widget.repository.start();
+
+    _hrSubscription = _hrService.bpmStream.listen((bpm) {
+      if (!mounted) return;
+      setState(() => _hrBpm = bpm);
+    });
   }
 
   void _handleTrailUpdate(CyclocompReading reading) {
@@ -279,10 +293,23 @@ class _CyclocompHomeState extends State<CyclocompHome> {
   void dispose() {
     _subscription?.cancel();
     _compassSubscription?.cancel();
+    _hrSubscription?.cancel();
+    _hrService.dispose();
     _pageController.dispose();
     _mapController.dispose();
     widget.repository.dispose();
     super.dispose();
+  }
+
+  void _openHeartRateSheet() {
+    showHeartRatePairingSheet(
+      context: context,
+      service: _hrService,
+      profile: _hrProfile,
+      onProfileSaved: (profile) {
+        setState(() => _hrProfile = profile);
+      },
+    );
   }
 
   @override
@@ -298,6 +325,9 @@ class _CyclocompHomeState extends State<CyclocompHome> {
             onPauseTrip: widget.repository.pauseTrip,
             onResumeTrip: widget.repository.resumeTrip,
             onStopTrip: widget.repository.stopTrip,
+            hrBpm: _hrBpm,
+            hrZone: _hrProfile.zoneFor(_hrBpm),
+            onHeartRateTap: _openHeartRateSheet,
           ),
           MapPage(
             reading: _reading,
@@ -394,6 +424,9 @@ class SpeedometerPage extends StatelessWidget {
     required this.onPauseTrip,
     required this.onResumeTrip,
     required this.onStopTrip,
+    required this.hrBpm,
+    required this.hrZone,
+    required this.onHeartRateTap,
   });
 
   final CyclocompReading reading;
@@ -401,6 +434,9 @@ class SpeedometerPage extends StatelessWidget {
   final VoidCallback onPauseTrip;
   final VoidCallback onResumeTrip;
   final VoidCallback onStopTrip;
+  final int hrBpm;
+  final HrZone hrZone;
+  final VoidCallback onHeartRateTap;
 
   @override
   Widget build(BuildContext context) {
@@ -475,6 +511,13 @@ class SpeedometerPage extends StatelessWidget {
                           Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              HeartRateBar(
+                                bpm: hrBpm,
+                                zone: hrZone,
+                                darkUi: darkUi,
+                                onTap: onHeartRateTap,
+                              ),
+                              const SizedBox(height: 16),
                               _TripStatsCard(
                                 distance: reading.distanceText,
                                 duration: reading.durationText,
