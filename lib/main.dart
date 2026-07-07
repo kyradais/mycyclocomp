@@ -2089,6 +2089,10 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
   CyclocompReading _current = CyclocompReading.idle('Menunggu GPS...');
   Position? _lastPosition;
   TripRecordingState _tripState = TripRecordingState.idle;
+
+  // Low-pass filter untuk speed — alpha 0.2 = keseimbangan mulus vs responsif
+  double _smoothedSpeed = 0.0;
+  static const double _speedAlpha = 0.2;
   DateTime? _tripStartedAt;
   Duration _tripAccumulatedDuration = Duration.zero;
   double _tripDistanceMeters = 0;
@@ -2192,7 +2196,17 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
   void _handlePosition(Position position) {
     _lastPosition = position;
 
-    final speedFromSensor = position.speed.isFinite ? position.speed * 3.6 : 0.0;
+    // Raw speed dari sensor GPS (m/s → km/h), fallback ke smoothed jika invalid
+    final rawSpeed = position.speed.isFinite && position.speed >= 0
+        ? position.speed * 3.6
+        : _smoothedSpeed;
+
+    // Low-pass filter: blend nilai baru dengan nilai sebelumnya
+    _smoothedSpeed = _speedAlpha * rawSpeed + (1 - _speedAlpha) * _smoothedSpeed;
+
+    // Snap ke 0 saat hampir berhenti — hilangkan noise GPS saat diam
+    if (_smoothedSpeed < 0.8) _smoothedSpeed = 0.0;
+
     if (_tripState == TripRecordingState.running) {
       if (_tripLastPosition != null) {
         _tripDistanceMeters += Geolocator.distanceBetween(
@@ -2206,7 +2220,7 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
     }
 
     _emitCurrent(
-      speedText: speedFromSensor > 0.5 ? 'GPS live' : 'Berhenti / pelan',
+      speedText: _smoothedSpeed > 0.5 ? 'GPS live' : 'Berhenti / pelan',
     );
   }
 
@@ -2220,9 +2234,7 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
     String? mapStatusText,
   }) {
     final now = DateTime.now();
-    final speedKmh = _lastPosition?.speed.isFinite == true
-        ? _lastPosition!.speed * 3.6
-        : 0.0;
+    final speedKmh = _smoothedSpeed;
     final duration = switch (_tripState) {
       TripRecordingState.idle => Duration.zero,
       TripRecordingState.running =>
