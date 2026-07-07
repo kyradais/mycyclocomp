@@ -312,6 +312,22 @@ class _CyclocompHomeState extends State<CyclocompHome> {
             onClearGpxRoute: _clearGpxRoute,
             onToggleFixNorth: _toggleFixNorth,
             onToggleUiTheme: widget.onToggleUiTheme,
+            onZoomIn: () {
+              if (_mapReady) {
+                _mapController.move(
+                  _mapController.camera.center,
+                  (_mapController.camera.zoom + 1).clamp(1.0, 20.0),
+                );
+              }
+            },
+            onZoomOut: () {
+              if (_mapReady) {
+                _mapController.move(
+                  _mapController.camera.center,
+                  (_mapController.camera.zoom - 1).clamp(1.0, 20.0),
+                );
+              }
+            },
             onMapReady: () {
               if (!mounted) {
                 return;
@@ -410,7 +426,6 @@ class SpeedometerPage extends StatelessWidget {
       child: SafeArea(
         child: Stack(
           children: [
-            Positioned.fill(child: _SpeedometerBackdrop(darkUi: darkUi)),
             LayoutBuilder(
               builder: (context, constraints) {
                 // Ukuran gauge menyesuaikan tinggi yang tersedia (misal saat
@@ -533,64 +548,6 @@ class _HeaderChip extends StatelessWidget {
   }
 }
 
-class _SpeedometerBackdrop extends StatelessWidget {
-  const _SpeedometerBackdrop({required this.darkUi});
-
-  final bool darkUi;
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(painter: _BackdropPainter(darkUi: darkUi));
-  }
-}
-
-class _BackdropPainter extends CustomPainter {
-  _BackdropPainter({required this.darkUi});
-
-  final bool darkUi;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-
-    for (var i = 0; i < 9; i++) {
-      paint.color = darkUi
-          ? Colors.white.withOpacity(0.03 + i * 0.004)
-          : Colors.black.withOpacity(0.02 + i * 0.003);
-      final radius = size.width * 0.16 + i * 28;
-      canvas.drawCircle(
-        Offset(size.width / 2, size.height * 0.58),
-        radius,
-        paint,
-      );
-    }
-
-    final glow = Paint()
-      ..shader = RadialGradient(
-        colors: [
-          (darkUi ? const Color(0xFF4DE1A1) : const Color(0xFF0E5E4C))
-              .withOpacity(0.18),
-          Colors.transparent,
-        ],
-      ).createShader(
-        Rect.fromCircle(
-          center: Offset(size.width / 2, size.height * 0.58),
-          radius: size.width * 0.45,
-        ),
-      );
-
-    canvas.drawCircle(
-      Offset(size.width / 2, size.height * 0.58),
-      size.width * 0.45,
-      glow,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
 
 class _SpeedometerGauge extends StatelessWidget {
   const _SpeedometerGauge({
@@ -1023,16 +980,16 @@ class _TripControlPanelState extends State<_TripControlPanel> {
             borderRadius: BorderRadius.circular(18),
             child: Container(
               height: 58,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(color: borderColor),
               ),
               child: Stack(
                 children: [
+                  // Progressbar mengisi penuh tanpa dipotong padding
                   Positioned.fill(
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(18),
+                      borderRadius: BorderRadius.circular(17),
                       child: Align(
                         alignment: Alignment.centerLeft,
                         child: FractionallySizedBox(
@@ -1051,25 +1008,29 @@ class _TripControlPanelState extends State<_TripControlPanel> {
                       ),
                     ),
                   ),
-                  Center(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.stop_rounded,
-                          size: 18,
-                          color: _stopHoldProgress > 0.0 ? stopAccent : textColor,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _stopHoldLabel,
-                          style: TextStyle(
+                  // Konten ikon + label pakai padding sendiri
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Center(
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.stop_rounded,
+                            size: 18,
                             color: _stopHoldProgress > 0.0 ? stopAccent : textColor,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 8),
+                          Text(
+                            _stopHoldLabel,
+                            style: TextStyle(
+                              color: _stopHoldProgress > 0.0 ? stopAccent : textColor,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -1080,64 +1041,56 @@ class _TripControlPanelState extends State<_TripControlPanel> {
       );
     }
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: borderColor),
-      ),
-      child: Column(
-        children: [
-          Text(
-            widget.tripState == TripRecordingState.idle
-                ? 'Record belum dimulai'
-                : widget.tripState == TripRecordingState.running
-                    ? 'Record aktif'
-                    : 'Record dijeda',
-            style: TextStyle(
-              color: subtleText,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.8,
-            ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          widget.tripState == TripRecordingState.idle
+              ? 'Record belum dimulai'
+              : widget.tripState == TripRecordingState.running
+                  ? 'Record aktif'
+                  : 'Record dijeda',
+          style: TextStyle(
+            color: subtleText,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.8,
           ),
-          const SizedBox(height: 10),
-          if (widget.tripState == TripRecordingState.idle)
-            SizedBox(
-              width: double.infinity,
-              child: controlButton(
-                icon: Icons.play_arrow_rounded,
-                label: 'Start',
-                onTap: widget.onStartTrip,
-                active: false,
-              ),
-            )
-          else ...[
-            Row(
-              children: [
-                Expanded(
-                  child: controlButton(
-                    icon: widget.tripState == TripRecordingState.running
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded,
-                    label: widget.tripState == TripRecordingState.running ? 'Pause' : 'Resume',
-                    onTap: widget.tripState == TripRecordingState.running
-                        ? widget.onPauseTrip
-                        : widget.onResumeTrip,
-                    active: true,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: holdToStopButton(),
-                ),
-              ],
+        ),
+        const SizedBox(height: 10),
+        if (widget.tripState == TripRecordingState.idle)
+          SizedBox(
+            width: double.infinity,
+            child: controlButton(
+              icon: Icons.play_arrow_rounded,
+              label: 'Start',
+              onTap: widget.onStartTrip,
+              active: false,
             ),
-          ],
+          )
+        else ...[
+          Row(
+            children: [
+              Expanded(
+                child: controlButton(
+                  icon: widget.tripState == TripRecordingState.running
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                  label: widget.tripState == TripRecordingState.running ? 'Pause' : 'Resume',
+                  onTap: widget.tripState == TripRecordingState.running
+                      ? widget.onPauseTrip
+                      : widget.onResumeTrip,
+                  active: true,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: holdToStopButton(),
+              ),
+            ],
+          ),
         ],
-      ),
+      ],
     );
   }
 }
@@ -1196,6 +1149,8 @@ class MapPage extends StatelessWidget {
     required this.onToggleFixNorth,
     required this.onToggleUiTheme,
     required this.onMapReady,
+    required this.onZoomIn,
+    required this.onZoomOut,
   });
 
   final CyclocompReading reading;
@@ -1211,6 +1166,8 @@ class MapPage extends StatelessWidget {
   final VoidCallback onToggleFixNorth;
   final VoidCallback onToggleUiTheme;
   final VoidCallback onMapReady;
+  final VoidCallback onZoomIn;
+  final VoidCallback onZoomOut;
 
   static const Color _trailColor = Color(0xFF35E27A);
   static const Color _gpxColor = Color(0xFFFFD23F);
@@ -1360,32 +1317,56 @@ class MapPage extends StatelessWidget {
                 ),
               ),
             ),
+            // Header row (IgnorePointer karena hanya dekorasi)
             IgnorePointer(
               child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        _HeaderChip(
-                          icon: Icons.map,
-                          label: 'Map',
-                          darkUi: darkUi,
-                        ),
-                        const Spacer(),
-                        _HeaderChip(
-                          icon: Icons.swipe_right,
-                          label: 'Swipe kembali',
-                          darkUi: darkUi,
-                        ),
-                      ],
+                    _HeaderChip(
+                      icon: Icons.map,
+                      label: 'Map',
+                      darkUi: darkUi,
                     ),
-                    const SizedBox(height: 18),
+                    const Spacer(),
+                    _HeaderChip(
+                      icon: Icons.swipe_right,
+                      label: 'Swipe kembali',
+                      darkUi: darkUi,
+                    ),
                   ],
                 ),
               ),
             ),
+            // Tool stack (FixNorth + Theme) — kiri atas di bawah logo Map
+            Positioned(
+              left: 20,
+              top: 72,
+              child: SafeArea(
+                bottom: false,
+                child: _MapToolStack(
+                  fixNorth: fixNorth,
+                  darkUi: darkUi,
+                  onToggleFixNorth: onToggleFixNorth,
+                  onToggleUiTheme: onToggleUiTheme,
+                ),
+              ),
+            ),
+            // Zoom buttons — kanan atas di bawah logo "Swipe kembali"
+            Positioned(
+              right: 20,
+              top: 72,
+              child: SafeArea(
+                bottom: false,
+                child: _MapZoomButtons(
+                  darkUi: darkUi,
+                  onZoomIn: onZoomIn,
+                  onZoomOut: onZoomOut,
+                ),
+              ),
+            ),
+            // Marker posisi user di tengah map
             Positioned.fill(
               child: IgnorePointer(
                 child: Center(
@@ -1393,30 +1374,28 @@ class MapPage extends StatelessWidget {
                 ),
               ),
             ),
+            // Speed digital + GPX bar di bawah
             Positioned(
               left: 20,
               right: 20,
               bottom: 20,
               child: SafeArea(
                 top: false,
-                child: _GpxUploadBar(
-                  darkUi: darkUi,
-                  gpxFileName: gpxFileName,
-                  onPickGpxFile: onPickGpxFile,
-                  onClearGpxRoute: onClearGpxRoute,
-                ),
-              ),
-            ),
-            Positioned(
-              right: 20,
-              bottom: 110,
-              child: SafeArea(
-                top: false,
-                child: _MapToolStack(
-                  fixNorth: fixNorth,
-                  darkUi: darkUi,
-                  onToggleFixNorth: onToggleFixNorth,
-                  onToggleUiTheme: onToggleUiTheme,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _MapSpeedBadge(
+                      speedKmh: reading.speedKmh,
+                      darkUi: darkUi,
+                    ),
+                    const SizedBox(height: 10),
+                    _GpxUploadBar(
+                      darkUi: darkUi,
+                      gpxFileName: gpxFileName,
+                      onPickGpxFile: onPickGpxFile,
+                      onClearGpxRoute: onClearGpxRoute,
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1506,6 +1485,99 @@ class _MapIconButton extends StatelessWidget {
           size: 26,
         ),
       ),
+    );
+  }
+}
+
+class _MapZoomButtons extends StatelessWidget {
+  const _MapZoomButtons({
+    required this.darkUi,
+    required this.onZoomIn,
+    required this.onZoomOut,
+  });
+
+  final bool darkUi;
+  final VoidCallback onZoomIn;
+  final VoidCallback onZoomOut;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _MapIconButton(
+          icon: Icons.add_rounded,
+          isActive: false,
+          onTap: onZoomIn,
+        ),
+        const SizedBox(height: 10),
+        _MapIconButton(
+          icon: Icons.remove_rounded,
+          isActive: false,
+          onTap: onZoomOut,
+        ),
+      ],
+    );
+  }
+}
+
+class _MapSpeedBadge extends StatelessWidget {
+  const _MapSpeedBadge({
+    required this.speedKmh,
+    required this.darkUi,
+  });
+
+  final double speedKmh;
+  final bool darkUi;
+
+  @override
+  Widget build(BuildContext context) {
+    // Samakan dengan style _MapIconButton: agak transparan, border tipis
+    final bgColor = darkUi ? Colors.black.withOpacity(0.42) : Colors.white.withOpacity(0.72);
+    final borderColor = darkUi ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.08);
+    final accentColor = darkUi ? const Color(0xFF4DE1A1) : const Color(0xFF0E5E4C);
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: speedKmh),
+      duration: const Duration(milliseconds: 600),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, _) {
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: borderColor),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                value.toStringAsFixed(1),
+                style: TextStyle(
+                  color: accentColor,
+                  fontSize: 38,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -1,
+                  height: 1.0,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'km/h',
+                style: TextStyle(
+                  color: darkUi ? Colors.white60 : Colors.black45,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
