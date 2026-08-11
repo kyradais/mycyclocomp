@@ -620,6 +620,8 @@ class SpeedometerPage extends StatelessWidget {
                                 onPauseTrip: onPauseTrip,
                                 onResumeTrip: onResumeTrip,
                                 onStopTrip: onStopTrip,
+                                avgSpeed: reading.avgSpeedText,
+                                maxSpeed: reading.maxSpeedText,
                               ),
                               const SizedBox(height: 20),
                             ],
@@ -879,6 +881,8 @@ class _TripStatsCard extends StatelessWidget {
     required this.onPauseTrip,
     required this.onResumeTrip,
     required this.onStopTrip,
+    required this.avgSpeed,
+    required this.maxSpeed,
   });
 
   final String distance;
@@ -890,6 +894,8 @@ class _TripStatsCard extends StatelessWidget {
   final VoidCallback onPauseTrip;
   final VoidCallback onResumeTrip;
   final VoidCallback onStopTrip;
+  final String avgSpeed;
+  final String maxSpeed;
 
   @override
   Widget build(BuildContext context) {
@@ -924,7 +930,7 @@ class _TripStatsCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 18),
-          Row(
+                    Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _MetricBlock(label: 'DISTANCE', value: distance),
@@ -932,6 +938,18 @@ class _TripStatsCard extends StatelessWidget {
               _MetricBlock(label: 'DURATION', value: duration),
             ],
           ),
+          // --- Kecepatan rata-rata dan maksimum: hanya saat trip mulai. ---
+          if (tripState != TripRecordingState.idle) ...[
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _MetricBlock(label: 'RATA²', value: avgSpeed),
+                Container(width: 1, height: 46, color: darkUi ? Colors.white12 : Colors.black12),
+                _MetricBlock(label: 'MAKS', value: maxSpeed),
+              ],
+            ),
+          ],
           const SizedBox(height: 16),
           _TripControlPanel(
             darkUi: darkUi,
@@ -2118,6 +2136,8 @@ class CyclocompReading {
     required this.position,
     required this.accuracyMeters,
     required this.speedKmh,
+    required this.avgSpeedKmh,
+    required this.maxSpeedKmh,
     required this.distanceMeters,
     required this.duration,
     required this.tripState,
@@ -2128,6 +2148,8 @@ class CyclocompReading {
   final LatLng? position;
   final double? accuracyMeters;
   final double speedKmh;
+  final double avgSpeedKmh;
+  final double maxSpeedKmh;
   final double distanceMeters;
   final Duration duration;
   final TripRecordingState tripState;
@@ -2143,6 +2165,10 @@ class CyclocompReading {
     return '$hours:$minutes:$seconds';
   }
 
+  String get avgSpeedText => '${avgSpeedKmh.toStringAsFixed(1)} km/h';
+
+  String get maxSpeedText => '${maxSpeedKmh.toStringAsFixed(1)} km/h';
+
   String get detailText => 'Distance  •  Duration';
 
   static CyclocompReading idle(String message) {
@@ -2150,6 +2176,8 @@ class CyclocompReading {
       position: null,
       accuracyMeters: null,
       speedKmh: 0,
+      avgSpeedKmh: 0,
+      maxSpeedKmh: 0,
       distanceMeters: 0,
       duration: Duration.zero,
       tripState: TripRecordingState.idle,
@@ -2162,6 +2190,8 @@ class CyclocompReading {
     LatLng? position,
     double? accuracyMeters,
     double? speedKmh,
+    double? avgSpeedKmh,
+    double? maxSpeedKmh,
     double? distanceMeters,
     Duration? duration,
     TripRecordingState? tripState,
@@ -2172,6 +2202,8 @@ class CyclocompReading {
       position: position ?? this.position,
       accuracyMeters: accuracyMeters ?? this.accuracyMeters,
       speedKmh: speedKmh ?? this.speedKmh,
+      avgSpeedKmh: avgSpeedKmh ?? this.avgSpeedKmh,
+      maxSpeedKmh: maxSpeedKmh ?? this.maxSpeedKmh,
       distanceMeters: distanceMeters ?? this.distanceMeters,
       duration: duration ?? this.duration,
       tripState: tripState ?? this.tripState,
@@ -2217,12 +2249,19 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
   Position? _lastPosition;
   TripRecordingState _tripState = TripRecordingState.idle;
 
-  // Low-pass filter untuk speed — alpha 0.2 = keseimbangan mulus vs responsif
+  // Low-pass filter adaptif: alpha naik saat perubahan nyata (responsif),
+  // turun saat stabil (mulus, buang noise). GPS fix interval ~0.5s.
   double _smoothedSpeed = 0.0;
-  static const double _speedAlpha = 0.2;
+  static const double _speedAlphaBase = 0.18;
+  static const double _speedAlphaMax = 0.6;
   DateTime? _tripStartedAt;
   Duration _tripAccumulatedDuration = Duration.zero;
   double _tripDistanceMeters = 0;
+  double _tripMaxSpeedKmh = 0;
+  double _tripSumSpeedKmh = 0;
+  int _tripSpeedSamples = 0;
+  DateTime? _lastGpsFixAt;
+  static const Duration _gpsStaleThreshold = Duration(seconds: 3);
   Position? _tripLastPosition;
 
   @override
@@ -2245,6 +2284,9 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
     _tripStartedAt = DateTime.now();
     _tripAccumulatedDuration = Duration.zero;
     _tripDistanceMeters = 0;
+    _tripMaxSpeedKmh = 0;
+    _tripSumSpeedKmh = 0;
+    _tripSpeedSamples = 0;
     _tripLastPosition = _lastPosition;
     _startTicker();
     _emitCurrent();
@@ -2341,17 +2383,31 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
 
   void _handlePosition(Position position) {
     _lastPosition = position;
+    final now = DateTime.now();
+    final hasValidSpeed =
+        position.speed.isFinite && position.speed >= 0;
 
-    // Raw speed dari sensor GPS (m/s → km/h), fallback ke smoothed jika invalid
-    final rawSpeed = position.speed.isFinite && position.speed >= 0
-        ? position.speed * 3.6
-        : _smoothedSpeed;
+    if (hasValidSpeed) {
+      _lastGpsFixAt = now;
+      final rawSpeed = position.speed * 3.6;
 
-    // Low-pass filter: blend nilai baru dengan nilai sebelumnya
-    _smoothedSpeed = _speedAlpha * rawSpeed + (1 - _speedAlpha) * _smoothedSpeed;
+      // Adaptive EMA: alpha naik saat perubahan nyata, turun saat stabil.
+      final delta = (rawSpeed - _smoothedSpeed).abs();
+      final ratio = (delta / 10.0).clamp(0.0, 1.0);
+      final alpha = _speedAlphaBase + (_speedAlphaMax - _speedAlphaBase) * ratio;
+      _smoothedSpeed = alpha * rawSpeed + (1 - alpha) * _smoothedSpeed;
 
-    // Snap ke 0 saat hampir berhenti — hilangkan noise GPS saat diam
-    if (_smoothedSpeed < 0.8) _smoothedSpeed = 0.0;
+      // Snap ke 0 saat hampir berhenti — hilangkan noise GPS saat diam.
+      if (_smoothedSpeed < 0.8) _smoothedSpeed = 0.0;
+
+      // Lacak max kecepatan saat trip aktif.
+      if (_tripState == TripRecordingState.running &&
+          _smoothedSpeed > _tripMaxSpeedKmh) {
+        _tripMaxSpeedKmh = _smoothedSpeed;
+      }
+    }
+    // Jika speed invalid: biarkan smoothedSpeed apa adanya; decay di
+    // _emitCurrent akan menurunkannya perlahan saat GPS benar hilang.
 
     if (_tripState == TripRecordingState.running) {
       if (_tripLastPosition != null) {
@@ -2363,11 +2419,15 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
         );
       }
       _tripLastPosition = position;
+
+      // Akumulasi untuk rata-rata kecepatan (hanya sample > 0.8 km/h).
+      if (_smoothedSpeed > 0.8) {
+        _tripSumSpeedKmh += _smoothedSpeed;
+        _tripSpeedSamples++;
+      }
     }
 
-    _emitCurrent(
-      speedText: _smoothedSpeed > 0.5 ? 'GPS live' : 'Berhenti / pelan',
-    );
+    _emitCurrent();
   }
 
   void _emitStatus(String message) {
@@ -2380,6 +2440,16 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
     String? mapStatusText,
   }) {
     final now = DateTime.now();
+
+    // GPS hilang: tidak ada fix valid lebih dari threshold → decay halus
+    // menuju 0 (bukan membekukan angka). Dipanggil ticker ~1 Hz saat trip aktif.
+    final gpsLost = _lastGpsFixAt != null &&
+        now.difference(_lastGpsFixAt!) > _gpsStaleThreshold;
+    if (gpsLost && _smoothedSpeed > 0.0) {
+      _smoothedSpeed *= 0.8;
+      if (_smoothedSpeed < 0.5) _smoothedSpeed = 0.0;
+    }
+
     final speedKmh = _smoothedSpeed;
     final duration = switch (_tripState) {
       TripRecordingState.idle => Duration.zero,
@@ -2394,16 +2464,24 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
       TripRecordingState.paused => _tripDistanceMeters,
     };
 
+        final avgSpeedKmh =
+        _tripSpeedSamples > 0 ? _tripSumSpeedKmh / _tripSpeedSamples : 0.0;
+    final status = speedText ?? (gpsLost && speedKmh > 0.0
+        ? 'GPS hilang — kecepatan menurun'
+        : (speedKmh > 0.5 ? 'GPS live' : 'Berhenti / pelan'));
+
     _current = CyclocompReading(
       position: _lastPosition == null
           ? null
           : LatLng(_lastPosition!.latitude, _lastPosition!.longitude),
       accuracyMeters: _lastPosition?.accuracy,
       speedKmh: speedKmh,
+      avgSpeedKmh: avgSpeedKmh,
+      maxSpeedKmh: _tripMaxSpeedKmh,
       distanceMeters: distanceMeters,
       duration: duration,
       tripState: _tripState,
-      statusText: speedText ?? (speedKmh > 0.5 ? 'GPS live' : 'Berhenti / pelan'),
+      statusText: status,
       mapStatusText:
           mapStatusText ?? 'Titik user mengikuti koordinat GPS aktual dan tetap berada di tengah map.',
     );
@@ -2469,6 +2547,8 @@ class FakeCyclocompRepository implements CyclocompRepository {
     position: const LatLng(-7.2765, 112.7919),
     accuracyMeters: 4.5,
     speedKmh: 28.4,
+    avgSpeedKmh: 28.4,
+    maxSpeedKmh: 28.4,
     distanceMeters: 0,
     duration: Duration.zero,
     tripState: TripRecordingState.idle,
