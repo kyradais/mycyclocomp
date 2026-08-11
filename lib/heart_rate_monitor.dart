@@ -98,6 +98,18 @@ class HeartRateProfile {
       weightKg: weightKg ?? this.weightKg,
     );
   }
+
+  Map<String, dynamic> toMap() => {
+        'age': ageYears,
+        'height': heightCm,
+        'weight': weightKg,
+      };
+
+  factory HeartRateProfile.fromMap(Map<String, dynamic> map) => HeartRateProfile(
+        ageYears: (map['age'] as num?)?.toInt(),
+        heightCm: (map['height'] as num?)?.toDouble(),
+        weightKg: (map['weight'] as num?)?.toDouble(),
+      );
 }
 
 /// Mengelola scan, koneksi, dan parsing data BLE Heart Rate.

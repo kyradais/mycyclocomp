@@ -13,6 +13,7 @@ import 'package:gpx/gpx.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'heart_rate_monitor.dart';
+import 'storage_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -124,7 +125,8 @@ enum TripRecordingState {
   paused,
 }
 
-class _CyclocompHomeState extends State<CyclocompHome> {
+class _CyclocompHomeState extends State<CyclocompHome>
+    with WidgetsBindingObserver {
   final PageController _pageController = PageController();
   final MapController _mapController = MapController();
 
@@ -150,6 +152,7 @@ class _CyclocompHomeState extends State<CyclocompHome> {
   // Rute GPX yang diupload manual oleh user.
   List<LatLng> _gpxRoutePoints = [];
   String? _gpxFileName;
+  Timer? _persistTimer;
 
   @override
   void initState() {
@@ -168,11 +171,82 @@ class _CyclocompHomeState extends State<CyclocompHome> {
       }
     });
     widget.repository.start();
+    WidgetsBinding.instance.addObserver(this);
+    _persistTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (_lastTripState != TripRecordingState.idle) {
+        _savePersistedState();
+      }
+    });
 
     _hrSubscription = _hrService.bpmStream.listen((bpm) {
       if (!mounted) return;
       setState(() => _hrBpm = bpm);
     });
+
+    _loadPersistedState();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Persistensi (tahap 1) — simpan & pulihkan data saat app di-close.
+  // ---------------------------------------------------------------------------
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _savePersistedState();
+    }
+  }
+
+  Future<void> _loadPersistedState() async {
+    final session = await StorageService.loadSession();
+    final (trail, gpx, gpxName) = await StorageService.loadTripData();
+    final profile = await StorageService.loadHrProfile();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _trailPoints.addAll(trail);
+      _gpxRoutePoints.addAll(gpx);
+      _gpxFileName = gpxName;
+      if (profile != null) {
+        _hrProfile = profile;
+      }
+    });
+    final state = switch (session.stateName) {
+      'running' => TripRecordingState.running,
+      'paused' => TripRecordingState.paused,
+      _ => TripRecordingState.idle,
+    };
+    if (state != TripRecordingState.idle) {
+      // Lanjutkan sesi trip yang tersimpan (running/paused).
+      _lastTripState = state;
+      widget.repository.restoreTrip(
+        state,
+        distanceMeters: session.distanceMeters,
+        duration: session.duration,
+      );
+    }
+  }
+
+  Future<void> _savePersistedState() async {
+    await StorageService.saveTripData(
+      _trailPoints,
+      _gpxRoutePoints,
+      _gpxFileName,
+    );
+    await StorageService.saveSession(
+      TripSession(
+        stateName: switch (_lastTripState) {
+          TripRecordingState.running => 'running',
+          TripRecordingState.paused => 'paused',
+          TripRecordingState.idle => 'idle',
+        },
+        distanceMeters: _reading.distanceMeters,
+        duration: _reading.duration,
+      ),
+    );
+    await StorageService.saveHrProfile(_hrProfile);
   }
 
   void _handleTrailUpdate(CyclocompReading reading) {
@@ -265,6 +339,7 @@ class _CyclocompHomeState extends State<CyclocompHome> {
         _gpxRoutePoints = points;
         _gpxFileName = picked.name;
       });
+      _savePersistedState();
 
       _mapController.fitCamera(
         CameraFit.coordinates(
@@ -287,10 +362,14 @@ class _CyclocompHomeState extends State<CyclocompHome> {
       _gpxRoutePoints = [];
       _gpxFileName = null;
     });
+    _savePersistedState();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _persistTimer?.cancel();
+    _savePersistedState();
     _subscription?.cancel();
     _compassSubscription?.cancel();
     _hrSubscription?.cancel();
@@ -308,6 +387,7 @@ class _CyclocompHomeState extends State<CyclocompHome> {
       profile: _hrProfile,
       onProfileSaved: (profile) {
         setState(() => _hrProfile = profile);
+        _savePersistedState();
       },
     );
   }
@@ -321,10 +401,22 @@ class _CyclocompHomeState extends State<CyclocompHome> {
         children: [
           SpeedometerPage(
             reading: _reading,
-            onStartTrip: widget.repository.startTrip,
-            onPauseTrip: widget.repository.pauseTrip,
-            onResumeTrip: widget.repository.resumeTrip,
-            onStopTrip: widget.repository.stopTrip,
+            onStartTrip: () {
+              widget.repository.startTrip();
+              _savePersistedState();
+            },
+            onPauseTrip: () {
+              widget.repository.pauseTrip();
+              _savePersistedState();
+            },
+            onResumeTrip: () {
+              widget.repository.resumeTrip();
+              _savePersistedState();
+            },
+            onStopTrip: () {
+              widget.repository.stopTrip();
+              _savePersistedState();
+            },
             hrBpm: _hrBpm,
             hrZone: _hrProfile.zoneFor(_hrBpm),
             onHeartRateTap: _openHeartRateSheet,
@@ -876,16 +968,31 @@ class _TripControlPanel extends StatefulWidget {
   State<_TripControlPanel> createState() => _TripControlPanelState();
 }
 
-class _TripControlPanelState extends State<_TripControlPanel> {
+class _TripControlPanelState extends State<_TripControlPanel> with SingleTickerProviderStateMixin {
   static const Duration _stopHoldDuration = Duration(milliseconds: 1000);
-  Timer? _stopHoldTimer;
-  DateTime? _stopHoldStartedAt;
+  late AnimationController _stopController;
   double _stopHoldProgress = 0;
-  bool _stopArmed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _stopController = AnimationController(vsync: this, duration: _stopHoldDuration)
+      ..addListener(() {
+        if (mounted) {
+          setState(() => _stopHoldProgress = _stopController.value);
+        }
+      })
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed && mounted) {
+          widget.onStopTrip();
+          _stopController.reset();
+        }
+      });
+  }
 
   @override
   void dispose() {
-    _cancelStopHold();
+    _stopController.dispose();
     super.dispose();
   }
 
@@ -893,42 +1000,12 @@ class _TripControlPanelState extends State<_TripControlPanel> {
     if (widget.tripState == TripRecordingState.idle) {
       return;
     }
-    _stopHoldTimer?.cancel();
-    _stopHoldStartedAt = DateTime.now();
-    _stopArmed = true;
-    setState(() => _stopHoldProgress = 0);
-    _stopHoldTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
-      if (!mounted || !_stopArmed || _stopHoldStartedAt == null) {
-        timer.cancel();
-        return;
-      }
-
-      final elapsed = DateTime.now().difference(_stopHoldStartedAt!);
-      final progress = (elapsed.inMilliseconds / _stopHoldDuration.inMilliseconds).clamp(0.0, 1.0);
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      setState(() => _stopHoldProgress = progress);
-
-      if (progress >= 1) {
-        timer.cancel();
-        _stopArmed = false;
-        _stopHoldStartedAt = null;
-        setState(() => _stopHoldProgress = 0);
-        widget.onStopTrip();
-      }
-    });
+    _stopController.forward(from: 0);
   }
 
   void _cancelStopHold() {
-    _stopHoldTimer?.cancel();
-    _stopHoldTimer = null;
-    _stopHoldStartedAt = null;
-    _stopArmed = false;
-    if (mounted && _stopHoldProgress != 0) {
-      setState(() => _stopHoldProgress = 0);
-    }
+    _stopController.stop();
+    _stopController.reset();
   }
 
   String get _stopHoldLabel {
@@ -2119,6 +2196,13 @@ abstract class CyclocompRepository {
 
   void stopTrip();
 
+  /// Pulihkan sesi trip yang tersimpan (saat app dibuka lagi setelah di-close).
+  void restoreTrip(
+    TripRecordingState state, {
+    double distanceMeters = 0,
+    Duration duration = Duration.zero,
+  });
+
   void dispose();
 }
 
@@ -2188,6 +2272,25 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
     _tripStartedAt = DateTime.now();
     _tripLastPosition = _lastPosition;
     _startTicker();
+    _emitCurrent();
+  }
+
+  @override
+  void restoreTrip(
+    TripRecordingState state, {
+    double distanceMeters = 0,
+    Duration duration = Duration.zero,
+  }) {
+    _tripState = state;
+    _tripDistanceMeters = distanceMeters;
+    _tripAccumulatedDuration = duration;
+    if (state == TripRecordingState.running) {
+      _tripStartedAt = DateTime.now();
+      _tripLastPosition = _lastPosition;
+      _startTicker();
+    } else {
+      _tripStartedAt = null;
+    }
     _emitCurrent();
   }
 
@@ -2403,6 +2506,20 @@ class FakeCyclocompRepository implements CyclocompRepository {
   @override
   void resumeTrip() {
     _initial = _initial.copyWith(tripState: TripRecordingState.running);
+    _controller.add(_initial);
+  }
+
+  @override
+  void restoreTrip(
+    TripRecordingState state, {
+    double distanceMeters = 0,
+    Duration duration = Duration.zero,
+  }) {
+    _initial = _initial.copyWith(
+      tripState: state,
+      distanceMeters: distanceMeters,
+      duration: duration,
+    );
     _controller.add(_initial);
   }
 
