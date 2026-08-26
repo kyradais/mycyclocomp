@@ -17,11 +17,11 @@ import 'storage_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // Sembunyikan status bar (atas) & navigation bar (bawah) agar app fullscreen.
-  // immersiveSticky: overlay bisa muncul sementara dengan swipe dari tepi,
-  // lalu otomatis sembunyi lagi.
+  // Hide status bar (top) & navigation bar (bottom) for fullscreen mode.
+  // immersiveSticky: overlay temporarily appears on edge swipe,
+  // then automatically hides again.
 
-  // Uncoment bagian ini untuk sembunyikan topbar
+  // Uncomment to hide the top bar
   // SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   runApp(const CyclocompApp());
 }
@@ -294,7 +294,7 @@ class _CyclocompHomeState extends State<CyclocompHome>
           return;
         }
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pilih file dengan ekstensi .gpx')),
+          const SnackBar(content: Text('Select .gpx file')),
         );
         return;
       }
@@ -352,7 +352,7 @@ class _CyclocompHomeState extends State<CyclocompHome>
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Gagal membaca file GPX: $error')),
+        SnackBar(content: Text('Failed to read GPX: $error')),
       );
     }
   }
@@ -585,7 +585,7 @@ class SpeedometerPage extends StatelessWidget {
                                   const Spacer(),
                                   _HeaderChip(
                                     icon: Icons.swipe_left,
-                                    label: 'Swipe ke Map',
+                                    label: 'Swipe to Map',
                                     darkUi: darkUi,
                                   ),
                                 ],
@@ -944,9 +944,9 @@ class _TripStatsCard extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                _MetricBlock(label: 'RATA²', value: avgSpeed),
+                _MetricBlock(label: 'AVG', value: avgSpeed),
                 Container(width: 1, height: 46, color: darkUi ? Colors.white12 : Colors.black12),
-                _MetricBlock(label: 'MAKS', value: maxSpeed),
+                _MetricBlock(label: 'MAX', value: maxSpeed),
               ],
             ),
           ],
@@ -1184,10 +1184,10 @@ class _TripControlPanelState extends State<_TripControlPanel> with SingleTickerP
       children: [
         Text(
           widget.tripState == TripRecordingState.idle
-              ? 'Record belum dimulai'
+              ? 'Ready to ride'
               : widget.tripState == TripRecordingState.running
-                  ? 'Record aktif'
-                  : 'Record dijeda',
+                  ? 'Recording'
+                  : 'Paused',
           style: TextStyle(
             color: subtleText,
             fontSize: 11,
@@ -1470,7 +1470,7 @@ class MapPage extends StatelessWidget {
                     const Spacer(),
                     _HeaderChip(
                       icon: Icons.swipe_right,
-                      label: 'Swipe kembali',
+                      label: 'Swipe back',
                       darkUi: darkUi,
                     ),
                   ],
@@ -2021,7 +2021,7 @@ class _GpxUploadBarState extends State<_GpxUploadBar> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Text(
-                                    'Rute GPX aktif',
+                                    'GPX Route Active',
                                     style: TextStyle(
                                       color: subtleText,
                                       fontSize: 10,
@@ -2115,7 +2115,7 @@ class _GpxUploadBarState extends State<_GpxUploadBar> {
                       Icon(Icons.upload_file_rounded, color: gpxColor, size: 20),
                       const SizedBox(width: 10),
                       Text(
-                        'Upload Rute GPX',
+                        'Upload GPX Route',
                         style: TextStyle(
                           color: textColor,
                           fontSize: 13,
@@ -2245,7 +2245,7 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
       StreamController<CyclocompReading>.broadcast();
   StreamSubscription<Position>? _subscription;
   Timer? _ticker;
-  CyclocompReading _current = CyclocompReading.idle('Menunggu GPS...');
+  CyclocompReading _current = CyclocompReading.idle('Waiting for GPS...');
   Position? _lastPosition;
   TripRecordingState _tripState = TripRecordingState.idle;
 
@@ -2350,34 +2350,44 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
   Future<void> _bootstrap() async {
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+
       if (!serviceEnabled) {
-        _emitStatus('Aktifkan lokasi untuk membaca speed dan peta');
+        _emitStatus(
+          'Enable location services to track speed and view the map.',
+        );
         return;
       }
 
       var permission = await Geolocator.checkPermission();
+
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
+
       if (permission == LocationPermission.denied) {
-        _emitStatus('Izin lokasi ditolak');
+        _emitStatus('Location permission denied.');
         return;
       }
+
       if (permission == LocationPermission.deniedForever) {
-        _emitStatus('Izin lokasi permanen ditolak');
+        _emitStatus(
+          'Location permission permanently denied. '
+          'Please enable it in your device settings.',
+        );
         return;
       }
 
       final firstPosition = await Geolocator.getCurrentPosition(
         locationSettings: _locationSettings(),
       );
+
       _handlePosition(firstPosition);
 
       _subscription = Geolocator.getPositionStream(
         locationSettings: _locationSettings(),
       ).listen(_handlePosition);
     } catch (error) {
-      _emitStatus('GPS belum tersedia: $error');
+      _emitStatus('GPS is not available: $error');
     }
   }
 
@@ -2467,8 +2477,8 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
         final avgSpeedKmh =
         _tripSpeedSamples > 0 ? _tripSumSpeedKmh / _tripSpeedSamples : 0.0;
     final status = speedText ?? (gpsLost && speedKmh > 0.0
-        ? 'GPS hilang — kecepatan menurun'
-        : (speedKmh > 0.5 ? 'GPS live' : 'Berhenti / pelan'));
+        ? 'GPS signal lost — speed may be inaccurate'
+        : (speedKmh > 0.5 ? 'GPS live' : 'Stopped / moving slowly'));
 
     _current = CyclocompReading(
       position: _lastPosition == null
@@ -2483,7 +2493,7 @@ class GeolocatorCyclocompRepository implements CyclocompRepository {
       tripState: _tripState,
       statusText: status,
       mapStatusText:
-          mapStatusText ?? 'Titik user mengikuti koordinat GPS aktual dan tetap berada di tengah map.',
+          mapStatusText ?? 'Your position follows live GPS coordinates and stays centered on the map.',
     );
     _controller.add(_current);
   }
@@ -2553,7 +2563,7 @@ class FakeCyclocompRepository implements CyclocompRepository {
     duration: Duration.zero,
     tripState: TripRecordingState.idle,
     statusText: 'GPS live',
-    mapStatusText: 'Demo data aktif untuk test atau preview UI.',
+    mapStatusText: 'Demo data is active for testing or UI preview.',
   );
 
   @override

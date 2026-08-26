@@ -5,11 +5,11 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 // ============================================================================
-// UUID standar BLE GATT "Heart Rate Service".
-// Chest-strap (Polar H10, Garmin HRM, Wahoo TICKR) & sebagian smartwatch
-// (Garmin, banyak Wear OS) broadcast service ini secara native.
-// CATATAN: Apple Watch TIDAK broadcast HR lewat GATT standar ke app lain,
-// jadi untuk iPhone/Apple Watch pairing ini tidak akan menemukan device.
+// Standard BLE GATT UUID for "Heart Rate Service".
+// Chest straps (Polar H10, Garmin HRM, Wahoo TICKR) & some smartwatches
+// (Garmin, most Wear OS devices) broadcast this service natively.
+// NOTE: Apple Watch does NOT broadcast HR via standard GATT to other apps,
+// so for iPhone/Apple Watch pairing this will not find the device.
 // ============================================================================
 final Guid heartRateServiceUuid = Guid('0000180d-0000-1000-8000-00805f9b34fb');
 final Guid heartRateMeasurementUuid =
@@ -17,53 +17,51 @@ final Guid heartRateMeasurementUuid =
 
 enum HrConnectionState { disconnected, scanning, connecting, connected }
 
-enum HrZone { istirahat, pemanasan, bakarLemak, aerobik, anaerobik, maksimal }
+enum HrZone { rest, warmup, fatBurn, aerobic, anaerobic, max }
 
 extension HrZoneX on HrZone {
   String get label {
     switch (this) {
-      case HrZone.istirahat:
-        return 'Istirahat';
-      case HrZone.pemanasan:
-        return 'Pemanasan';
-      case HrZone.bakarLemak:
-        return 'Bakar Lemak';
-      case HrZone.aerobik:
-        return 'Aerobik';
-      case HrZone.anaerobik:
-        return 'Anaerobik';
-      case HrZone.maksimal:
-        return 'Maksimal';
+      case HrZone.rest:
+        return 'Rest';
+      case HrZone.warmup:
+        return 'Warm-up';
+      case HrZone.fatBurn:
+        return 'Fat Burn';
+      case HrZone.aerobic:
+        return 'Aerobic';
+      case HrZone.anaerobic:
+        return 'Anaerobic';
+      case HrZone.max:
+        return 'Max';
     }
   }
 
-  /// Warna indikator zona — dibedakan jelas per level intensitas.
+  /// Zone indicator color — distinct per intensity level.
   Color get color {
     switch (this) {
-      case HrZone.istirahat:
-        return const Color(0xFF7C93A8); // abu kebiruan
-      case HrZone.pemanasan:
-        return const Color(0xFF4D9DE1); // biru
-      case HrZone.bakarLemak:
-        return const Color(0xFF4DE1A1); // hijau/teal (senada aksen app)
-      case HrZone.aerobik:
-        return const Color(0xFFE1D24D); // kuning
-      case HrZone.anaerobik:
-        return const Color(0xFFE1974D); // oranye
-      case HrZone.maksimal:
-        return const Color(0xFFE14D4D); // merah
+      case HrZone.rest:
+        return const Color(0xFF7C93A8); // bluish gray
+      case HrZone.warmup:
+        return const Color(0xFF4D9DE1); // blue
+      case HrZone.fatBurn:
+        return const Color(0xFF4DE1A1); // green/teal (app accent)
+      case HrZone.aerobic:
+        return const Color(0xFFE1D24D); // yellow
+      case HrZone.anaerobic:
+        return const Color(0xFFE1974D); // orange
+      case HrZone.max:
+        return const Color(0xFFE14D4D); // red
     }
   }
 }
 
-/// Data biometrik user, dipakai untuk menentukan Max HR & zona.
+/// User biometric data, used to determine Max HR & HR zones.
 ///
-/// Catatan penting: rumus zona detak jantung yang akurat secara fisiologis
-/// berbasis USIA (Max HR ≈ 208 − 0.7×usia — formula Tanaka), bukan tinggi
-/// atau berat badan. Tinggi & berat badan disimpan sesuai permintaan (dan
-/// berguna untuk fitur turunan seperti estimasi kalori/BMI di masa depan),
-/// namun kolom Usia ditambahkan sebagai penentu utama Max HR agar zona yang
-/// dihasilkan valid.
+/// Key note: Physiologically accurate HR zone formula is based on AGE
+/// (Max HR ≈ 208 − 0.7×age — Tanaka formula), not height or weight.
+/// Height & weight are stored optionally (useful for future features like
+/// calorie/BMI estimation), but Age is the primary Max HR determinant.
 class HeartRateProfile {
   const HeartRateProfile({this.ageYears, this.heightCm, this.weightKg});
 
@@ -77,14 +75,14 @@ class HeartRateProfile {
   }
 
   HrZone zoneFor(int bpm) {
-    if (bpm <= 0) return HrZone.istirahat;
+    if (bpm <= 0) return HrZone.rest;
     final pct = (bpm / maxHr) * 100;
-    if (pct < 50) return HrZone.istirahat;
-    if (pct < 60) return HrZone.pemanasan;
-    if (pct < 70) return HrZone.bakarLemak;
-    if (pct < 80) return HrZone.aerobik;
-    if (pct < 90) return HrZone.anaerobik;
-    return HrZone.maksimal;
+    if (pct < 50) return HrZone.rest;
+    if (pct < 60) return HrZone.warmup;
+    if (pct < 70) return HrZone.fatBurn;
+    if (pct < 80) return HrZone.aerobic;
+    if (pct < 90) return HrZone.anaerobic;
+    return HrZone.max;
   }
 
   HeartRateProfile copyWith({
@@ -307,7 +305,7 @@ class HeartRateBar extends StatelessWidget {
                 border: Border.all(color: zone.color.withOpacity(0.55)),
               ),
               child: Text(
-                hasSignal ? zone.label : 'Belum terhubung',
+                hasSignal ? zone.label : 'Disconnected',
                 style: TextStyle(
                   color: zone.color,
                   fontSize: 12,
@@ -458,7 +456,7 @@ class _HeartRatePairingSheetState extends State<_HeartRatePairingSheet> {
       ),
     );
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Data biometrik disimpan')),
+      const SnackBar(content: Text('Biometric data saved')),
     );
   }
 
@@ -518,10 +516,10 @@ class _HeartRatePairingSheetState extends State<_HeartRatePairingSheet> {
                     child: Text(
                       switch (_connState) {
                         HrConnectionState.connected =>
-                          'Terhubung: ${widget.service.connectedDeviceName ?? "-"}',
-                        HrConnectionState.connecting => 'Menghubungkan...',
-                        HrConnectionState.scanning => 'Mencari device...',
-                        HrConnectionState.disconnected => 'Belum terhubung',
+                          'Connected: ${widget.service.connectedDeviceName ?? "-"}',
+                        HrConnectionState.connecting => 'Connecting...',
+                        HrConnectionState.scanning => 'Scanning for device...',
+                        HrConnectionState.disconnected => 'Disconnected',
                       },
                       style: TextStyle(
                         color: darkUi ? Colors.white70 : Colors.black54,
@@ -532,7 +530,7 @@ class _HeartRatePairingSheetState extends State<_HeartRatePairingSheet> {
                   if (_connState == HrConnectionState.connected)
                     TextButton(
                       onPressed: () => widget.service.disconnect(),
-                      child: const Text('Putuskan'),
+                      child: const Text('Disconnect'),
                     )
                   else
                     FilledButton.icon(
@@ -559,7 +557,7 @@ class _HeartRatePairingSheetState extends State<_HeartRatePairingSheet> {
                     subtitle: Text('RSSI: ${r.rssi}'),
                     trailing: FilledButton(
                       onPressed: () => widget.service.connect(r.device),
-                      child: const Text('Hubungkan'),
+                      child: const Text('Connect'),
                     ),
                   ),
                 );
@@ -567,23 +565,23 @@ class _HeartRatePairingSheetState extends State<_HeartRatePairingSheet> {
 
               const SizedBox(height: 24),
 
-              // --- Form biometrik untuk penentuan zona ---
-              _SectionLabel('DATA UNTUK ZONA HEART RATE', darkUi: darkUi),
+              // --- Biometrics form for heart rate zone calculation ---
+              _SectionLabel('HEART RATE ZONE DATA', darkUi: darkUi),
               const SizedBox(height: 6),
               Text(
-                'Usia dipakai untuk menghitung Max HR (208 − 0.7×usia). '
-                'Tinggi & berat tersimpan untuk fitur tambahan (mis. estimasi kalori).',
+                'Age is used to calculate Max HR (208 − 0.7 × age). '
+                'Height & weight are stored for additional features (e.g., calorie estimation).',
                 style: TextStyle(
                   color: darkUi ? Colors.white38 : Colors.black38,
                   fontSize: 11.5,
                 ),
               ),
               const SizedBox(height: 12),
-              _NumberField(controller: _ageCtrl, label: 'Usia (tahun)', darkUi: darkUi),
+              _NumberField(controller: _ageCtrl, label: 'Age (year)', darkUi: darkUi),
               const SizedBox(height: 10),
-              _NumberField(controller: _heightCtrl, label: 'Tinggi badan (cm)', darkUi: darkUi),
+              _NumberField(controller: _heightCtrl, label: 'Body Heigt (cm)', darkUi: darkUi),
               const SizedBox(height: 10),
-              _NumberField(controller: _weightCtrl, label: 'Berat badan (kg)', darkUi: darkUi),
+              _NumberField(controller: _weightCtrl, label: 'Body Weight (kg)', darkUi: darkUi),
               const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,
@@ -591,7 +589,7 @@ class _HeartRatePairingSheetState extends State<_HeartRatePairingSheet> {
                   onPressed: _saveProfile,
                   child: const Padding(
                     padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text('Simpan'),
+                    child: Text('Save'),
                   ),
                 ),
               ),
