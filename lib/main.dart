@@ -15,6 +15,17 @@ import 'package:latlong2/latlong.dart';
 import 'heart_rate_monitor.dart';
 import 'storage_service.dart';
 
+/// Grayscale + invert matrix for dark map tiles.
+/// Luminance weights (0.2125, 0.7154, 0.0721) negated with +255 offset:
+/// roads become light-on-dark, colored POI/landuse fills collapse to gray.
+const List<double> _darkMapMatrix = <double>[
+  -0.2125, -0.7154, -0.0721, 0, 255, //
+  -0.2125, -0.7154, -0.0721, 0, 255, //
+  -0.2125, -0.7154, -0.0721, 0, 255, //
+  0, 0, 0, 1, 0, //
+];
+
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   // Hide status bar (top) & navigation bar (bottom) for fullscreen mode.
@@ -1408,8 +1419,17 @@ class MapPage extends StatelessWidget {
                 children: [
                   TileLayer(
                     urlTemplate:
-                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+                    subdomains: const ['a', 'b'],
                     userAgentPackageName: 'com.example.mycyclocomp',
+                    tileBuilder: darkUi
+                        ? (context, tileWidget, tile) => ColorFiltered(
+                              colorFilter: const ColorFilter.matrix(
+                                _darkMapMatrix,
+                              ),
+                              child: tileWidget,
+                            )
+                        : null,
                   ),
                   RichAttributionWidget(
                     attributions: [
