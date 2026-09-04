@@ -14,6 +14,8 @@ class TripSession {
     required this.stateName,
     required this.distanceMeters,
     required this.duration,
+    required this.avgSpeedKmh,
+    required this.maxSpeedKmh,
   });
 
   /// 'idle' | 'running' | 'paused' — disimpan sebagai String agar
@@ -21,17 +23,23 @@ class TripSession {
   final String stateName;
   final double distanceMeters;
   final Duration duration;
+  final double avgSpeedKmh;
+  final double maxSpeedKmh;
 
   factory TripSession.idle() => TripSession(
         stateName: 'idle',
         distanceMeters: 0,
         duration: Duration.zero,
+        avgSpeedKmh: 0,
+        maxSpeedKmh: 0,
       );
 
   Map<String, dynamic> toJson() => {
         'state': stateName,
         'distanceMeters': distanceMeters,
         'durationSeconds': duration.inSeconds,
+        'avgSpeedKmh': avgSpeedKmh,
+        'maxSpeedKmh': maxSpeedKmh,
       };
 
   factory TripSession.fromJson(Map<String, dynamic> json) => TripSession(
@@ -40,6 +48,8 @@ class TripSession {
         duration: Duration(
           seconds: (json['durationSeconds'] as num?)?.toInt() ?? 0,
         ),
+        avgSpeedKmh: (json['avgSpeedKmh'] as num?)?.toDouble() ?? 0,
+        maxSpeedKmh: (json['maxSpeedKmh'] as num?)?.toDouble() ?? 0,
       );
 }
 

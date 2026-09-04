@@ -247,15 +247,18 @@ class _CyclocompHomeState extends State<CyclocompHome>
       _gpxFileName,
     );
     await StorageService.saveSession(
-      TripSession(
-        stateName: switch (_lastTripState) {
-          TripRecordingState.running => 'running',
-          TripRecordingState.paused => 'paused',
-          TripRecordingState.idle => 'idle',
-        },
-        distanceMeters: _reading.distanceMeters,
-        duration: _reading.duration,
-      ),
+
+        TripSession(
+          stateName: switch (_lastTripState) {
+            TripRecordingState.running => 'running',
+            TripRecordingState.paused => 'paused',
+            TripRecordingState.idle => 'idle',
+          },
+          distanceMeters: _reading.distanceMeters,
+          duration: _reading.duration,
+          avgSpeedKmh: _reading.avgSpeedKmh,
+          maxSpeedKmh: _reading.maxSpeedKmh,
+        ),
     );
     await StorageService.saveHrProfile(_hrProfile);
   }
