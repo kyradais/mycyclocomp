@@ -1384,24 +1384,26 @@ class MapPage extends StatelessWidget {
     final center = position ?? const LatLng(-7.2765, 112.7919);
 
     return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: darkUi
-              ? const [
-                  Color(0xFF07131C),
-                  Color(0xFF0B1B20),
-                  Color(0xFF081018),
-                ]
-              : const [
-                  Color(0xFFF7FAF8),
-                  Color(0xFFE8F1EC),
-                  Color(0xFFFDFEFE),
-                ],
+      color: darkUi ? Colors.black : Colors.white,
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: darkUi
+                ? const [
+                    Color(0xFF07131C),
+                    Color(0xFF0B1B20),
+                    Color(0xFF081018),
+                  ]
+                : const [
+                    Color(0xFFF7FAF8),
+                    Color(0xFFE8F1EC),
+                    Color(0xFFFDFEFE),
+                  ],
+          ),
         ),
-      ),
-      child: SafeArea(
+        child: SafeArea(
         child: Stack(
           children: [
             const Positioned.fill(child: _MapBackdrop()),
@@ -1417,19 +1419,27 @@ class MapPage extends StatelessWidget {
                   onMapReady: onMapReady,
                 ),
                 children: [
+                  // TileLayer: menampilkan tile peta OpenStreetMap ( HOT style )
+                  // dengan opsi dark mode via ColorFiltered + _darkMapMatrix.
+                  // Transform.scale sedikit melebar tile (~1 px per sisi) untuk
+                  // menutup gap sub-pixel antar tile.
                   TileLayer(
                     urlTemplate:
                         'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
                     subdomains: const ['a', 'b'],
                     userAgentPackageName: 'com.example.mycyclocomp',
-                    tileBuilder: darkUi
-                        ? (context, tileWidget, tile) => ColorFiltered(
-                              colorFilter: const ColorFilter.matrix(
-                                _darkMapMatrix,
-                              ),
-                              child: tileWidget,
-                            )
-                        : null,
+                    tileBuilder: (context, tileWidget, tile) {
+                      final Widget darkFiltered = ColorFiltered(
+                        colorFilter: const ColorFilter.matrix(
+                          _darkMapMatrix,
+                        ),
+                        child: tileWidget,
+                      );
+                      return Transform.scale(
+                        scale: 1 + 2 / 256, // 258/256 ≈ 1.0078 — overlaps ~1 px
+                        child: darkUi ? darkFiltered : tileWidget,
+                      );
+                    },
                   ),
                   RichAttributionWidget(
                     attributions: [
@@ -1562,6 +1572,7 @@ class MapPage extends StatelessWidget {
               ),
             ),
           ],
+        ),
         ),
       ),
     );
